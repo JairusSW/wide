@@ -224,20 +224,14 @@ Identity, engine constraints, platforms, and registry metadata live in
 
 ## Performance
 
-On a Ryzen 7 7800X3D, 10,000-operation in-Wasm loops measured:
-
-| Width | Before | Optimized | Delta |
-| --- | ---: | ---: | ---: |
-| v256 | 1.086 ns/op | 0.755 ns/op | 30.5% faster |
-| v512 | 1.606 ns/op | 1.134 ns/op | 29.4% faster |
-
-Both paths report zero Go allocations per invocation. The width-aware selector
-also measured:
+On a Ryzen 7 7800X3D, 10,000-operation in-Wasm loops report zero Go
+allocations per invocation. Comparing the two available v512 lowering
+strategies:
 
 - `v512.xor`: 1.145 ns/op with two YMM chunks versus 1.258 ns/op with forced
-  ZMM;
+  ZMM, so Wago selects YMM;
 - `i64x8.mul`: 1.248 ns/op with direct AVX-512 versus 1.551 ns/op through the
-  AVX2 sequence, a 19.5% improvement.
+  AVX2 sequence, so Wago selects ZMM for a 19.5% improvement.
 
 Run the benchmarks locally:
 
