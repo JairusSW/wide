@@ -243,16 +243,31 @@ portable v128-backed implementation and omit Wide imports.
 
 ## Instruction ABI
 
-Every semantic operation is an ordinary Wasm import with an erased-reference
-physical signature:
+Every semantic operation is an ordinary Wasm import. The default carrier `C`
+is `externref`:
 
 | Shape | Wasm signature |
 | --- | --- |
-| Load | `(address: i32) -> externref` |
-| Unary | `(input: externref) -> externref` |
-| Binary | `(left: externref, right: externref) -> externref` |
-| Ternary | `(a: externref, b: externref, c: externref) -> externref` |
-| Store | `(value: externref, address: i32) -> ()` |
+| Load | `(address: i32) -> C` |
+| Unary | `(input: C) -> C` |
+| Binary | `(left: C, right: C) -> C` |
+| Ternary | `(a: C, b: C, c: C) -> C` |
+| Store | `(value: C, address: i32) -> ()` |
+
+An embedder may instead select `i32`, `i64`, `f32`, `f64`, `v128`, or
+`funcref`. The guest and plugin must use the same carrier:
+
+```go
+if err := rt.Use(wide.New(wide.WithCarrier(wago.WasmV128))); err != nil {
+	panic(err)
+}
+```
+
+For AssemblyScript, pair that with `AS_SIMD_WIDE_CARRIER=v128` when invoking
+the `as-simd` transform. Selecting a carrier changes only the module's
+validation signature. Wago still assigns the registered `wide.v256` or
+`wide.v512` identity and rejects ordinary values of the same Wasm type at a
+custom-instruction boundary.
 
 Import names scale standard SIMD lane shapes to the selected width:
 
@@ -270,7 +285,7 @@ Wago validates each imported physical signature before code generation. The
 guest never observes AVX opcodes, YMM/ZMM registers, NEON registers, numeric
 `0xfd` subopcodes, or encoder details.
 
-Virtual values have expression lifetime: nest them directly through Wide
+Erased custom values have expression lifetime: nest them directly through Wide
 imports, then store or drop the result. They cannot be put in Wasm locals,
 returned from guest functions, passed to ordinary functions, or carried across
 control flow. Wago rejects those escapes at compilation instead of silently
@@ -396,6 +411,12 @@ AVX2, and NEON lowering. Wago owns validation, checked-address construction,
 register allocation, and raw target encoders. This keeps machine-code access
 out of the guest ABI and makes the same Wasm module portable across supported
 hosts without placing Wide-specific semantics in Wago.
+
+At registration, Wide declares `wide.v256` and `wide.v512` through Wago's
+custom-type registry. `WasmExternRef` is the default carrier; the registered
+identity and native register bundles are compiler-only. Wide and other plugins
+may instead select `WasmI32`, `WasmI64`, `WasmF32`, `WasmF64`, `WasmV128`, or
+`WasmFuncRef` without changing Wago's instruction-lowering interface.
 
 ## Contributing
 

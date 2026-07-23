@@ -15,18 +15,18 @@ func memoryTargetLowerings(bits uint16, opcode uint32, arity int) (*wago.AMD64In
 	return amd64Lowering(bits, opcode, arity), arm64Lowering(bits, opcode, arity)
 }
 
-func virtualTargetLowerings(bits uint16, opcode uint32, arity int) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
-	return virtualAMD64Lowering(bits, opcode, arity), virtualARM64Lowering(bits, opcode, arity)
+func customTargetLowerings(bits uint16, opcode uint32, arity int) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
+	return customAMD64Lowering(bits, opcode, arity), customARM64Lowering(bits, opcode, arity)
 }
 
-func virtualAMD64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64InstructionLowering {
+func customAMD64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64InstructionLowering {
 	return &wago.AMD64InstructionLowering{
 		Compatibility: wago.AMD64CompatibilityFullAccess,
 		Features:      wago.AMD64FeatureAVX2,
 		Emit: func(ctx wago.AMD64LoweringContext) error {
 			inputs := make([][]x86.Reg, arity)
 			for i := range inputs {
-				regs, err := ctx.InputVirtual(i)
+				regs, err := ctx.InputCustom(i)
 				if err != nil {
 					return err
 				}
@@ -45,7 +45,7 @@ func virtualAMD64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64Inst
 				}
 				outputs[chunk] = out
 			}
-			if err := ctx.OutputVirtual(outputs...); err != nil {
+			if err := ctx.OutputCustom(outputs...); err != nil {
 				return fmt.Errorf("%w (inputs %v)", err, inputs)
 			}
 			return nil
@@ -53,20 +53,20 @@ func virtualAMD64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64Inst
 	}
 }
 
-func virtualARM64Lowering(bits uint16, opcode uint32, arity int) *wago.ARM64InstructionLowering {
+func customARM64Lowering(bits uint16, opcode uint32, arity int) *wago.ARM64InstructionLowering {
 	return &wago.ARM64InstructionLowering{
 		Compatibility: wago.ARM64CompatibilityFullAccess,
 		Emit: func(ctx wago.ARM64LoweringContext) error {
 			inputs := make([][]a64.Reg, arity)
 			seen := map[a64.Reg]bool{}
 			for i := range inputs {
-				regs, err := ctx.InputVirtual(i)
+				regs, err := ctx.InputCustom(i)
 				if err != nil {
 					return err
 				}
 				for _, reg := range regs {
 					if seen[reg] {
-						return fmt.Errorf("wide: arm64 virtual input bundles alias at register %d: %v", reg, inputs)
+						return fmt.Errorf("wide: arm64 custom input bundles alias at register %d: %v", reg, inputs)
 					}
 					seen[reg] = true
 				}
@@ -85,7 +85,7 @@ func virtualARM64Lowering(bits uint16, opcode uint32, arity int) *wago.ARM64Inst
 				}
 				outputs[chunk] = out
 			}
-			if err := ctx.OutputVirtual(outputs...); err != nil {
+			if err := ctx.OutputCustom(outputs...); err != nil {
 				return fmt.Errorf("%w (inputs %v)", err, inputs)
 			}
 			return nil
@@ -93,7 +93,7 @@ func virtualARM64Lowering(bits uint16, opcode uint32, arity int) *wago.ARM64Inst
 	}
 }
 
-func virtualLoadLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
+func customLoadLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
 	amd64 := &wago.AMD64InstructionLowering{
 		Compatibility: wago.AMD64CompatibilityFullAccess,
 		Features:      wago.AMD64FeatureAVX2,
@@ -109,7 +109,7 @@ func virtualLoadLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.AR
 				outputs[i] = reg
 			}
 			ctx.ReleaseGP(index)
-			return ctx.OutputVirtual(outputs...)
+			return ctx.OutputCustom(outputs...)
 		},
 	}
 	arm64 := &wago.ARM64InstructionLowering{
@@ -126,18 +126,18 @@ func virtualLoadLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.AR
 				outputs[i] = reg
 			}
 			ctx.ReleaseGP(index)
-			return ctx.OutputVirtual(outputs...)
+			return ctx.OutputCustom(outputs...)
 		},
 	}
 	return amd64, arm64
 }
 
-func virtualStoreLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
+func customStoreLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
 	amd64 := &wago.AMD64InstructionLowering{
 		Compatibility: wago.AMD64CompatibilityFullAccess,
 		Features:      wago.AMD64FeatureAVX2,
 		Emit: func(ctx wago.AMD64LoweringContext) error {
-			values, err := ctx.InputVirtual(0)
+			values, err := ctx.InputCustom(0)
 			if err != nil {
 				return err
 			}
@@ -156,7 +156,7 @@ func virtualStoreLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.A
 	arm64 := &wago.ARM64InstructionLowering{
 		Compatibility: wago.ARM64CompatibilityFullAccess,
 		Emit: func(ctx wago.ARM64LoweringContext) error {
-			values, err := ctx.InputVirtual(0)
+			values, err := ctx.InputCustom(0)
 			if err != nil {
 				return err
 			}

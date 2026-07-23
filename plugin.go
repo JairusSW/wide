@@ -1,5 +1,5 @@
 // Package wide provides architecture-neutral v256 and v512 instruction
-// declarations for Wago. Guest modules use ordinary validated i32 imports;
+// declarations for Wago. Guest modules use ordinary validated Wasm imports;
 // Wide selects the fastest native SIMD lowering available on the host.
 package wide
 
@@ -15,7 +15,16 @@ const (
 	InstructionModule = "as-simd"
 )
 
-type extension struct{}
+type extension struct{ carrier wago.WasmType }
+
+type Option func(*extension)
+
+// WithCarrier selects the standard Wasm type used to validate Wide's
+// compiler-erased vector values. Both the guest module and plugin must select
+// the same carrier.
+func WithCarrier(carrier wago.WasmType) Option {
+	return func(ext *extension) { ext.carrier = carrier }
+}
 
 func nativeOnlyHandler(name string) wago.InstructionHandler {
 	return func(_ wago.InstructionContext, _ []wago.Bits) ([]wago.Bits, error) {
@@ -23,7 +32,15 @@ func nativeOnlyHandler(name string) wago.InstructionHandler {
 	}
 }
 
-func New() wago.Extension { return extension{} }
+func New(options ...Option) wago.Extension {
+	ext := extension{carrier: wago.WasmExternRef}
+	for _, option := range options {
+		if option != nil {
+			option(&ext)
+		}
+	}
+	return ext
+}
 
 func (extension) Info() wago.ExtensionInfo {
 	return wago.ExtensionInfo{
@@ -39,8 +56,19 @@ func (extension) Info() wago.ExtensionInfo {
 	}
 }
 
-func (extension) Register(reg *wago.Registry) error {
+func (e extension) Register(reg *wago.Registry) error {
 	reg.Capability(wago.CapCompilerCodegen, wago.CapabilityDocs("Declares checked architecture-neutral as-simd pointer operations for native SIMD lowering."))
+	compiler := reg.Compiler()
+	customTypes := make(map[uint16]wago.CustomType, 2)
+	for _, bits := range []uint16{256, 512} {
+		typ, err := compiler.Type(wago.CustomTypeSpec{
+			Name: "wide.v" + itoa(int(bits)), Size: int32(bits / 8), Carrier: e.carrier,
+		})
+		if err != nil {
+			return err
+		}
+		customTypes[bits] = typ
+	}
 	subs := make([]int, 0, len(canonicalNames))
 	for sub := range canonicalNames {
 		subs = append(subs, int(sub))
@@ -54,21 +82,19 @@ func (extension) Register(reg *wago.Registry) error {
 			continue
 		}
 		for _, bits := range []uint16{256, 512} {
-			virtualType := wago.VirtualType{Name: "wide.v" + itoa(int(bits)), Size: int32(bits / 8)}
-			inputs := make([]int32, arity)
-			virtualInputs := make([]wago.VirtualType, arity)
-			for i := range inputs {
-				inputs[i] = int32(bits)
-				virtualInputs[i] = virtualType
+			customType := customTypes[bits]
+			customInputs := make([]wago.CustomType, arity)
+			for i := range customInputs {
+				customInputs[i] = customType
 			}
 			width, opcode := bits, sub
 			name, _ := instructionName(width, opcode)
-			amd64, arm64 := virtualTargetLowerings(width, opcode, arity)
-			err := reg.Compiler().Instruction(wago.InstructionSpec{
-				Module: InstructionModule, Name: name, Input: inputs, Output: []int32{int32(bits)},
-				Virtual: &wago.VirtualSignature{Inputs: virtualInputs, Output: &virtualType},
-				AMD64:   amd64,
-				ARM64:   arm64,
+			amd64, arm64 := customTargetLowerings(width, opcode, arity)
+			err := compiler.Instruction(wago.InstructionSpec{
+				Module: InstructionModule, Name: name,
+				Custom: &wago.CustomSignature{Inputs: customInputs, Output: &customType},
+				AMD64:  amd64,
+				ARM64:  arm64,
 			})
 			if err != nil {
 				return err
@@ -78,7 +104,7 @@ func (extension) Register(reg *wago.Registry) error {
 				memoryInputs[i] = 32
 			}
 			amd64, arm64 = memoryTargetLowerings(width, opcode, arity)
-			if err := reg.Compiler().Instruction(wago.InstructionSpec{
+			if err := compiler.Instruction(wago.InstructionSpec{
 				Module: InstructionModule, Name: name + ".memory", Input: memoryInputs,
 				Handler: nativeOnlyHandler(name + ".memory"), AMD64: amd64, ARM64: arm64,
 			}); err != nil {
@@ -87,23 +113,23 @@ func (extension) Register(reg *wago.Registry) error {
 		}
 	}
 	for _, bits := range []uint16{256, 512} {
-		virtualType := wago.VirtualType{Name: "wide.v" + itoa(int(bits)), Size: int32(bits / 8)}
-		empty := []wago.VirtualType{{}}
-		amd64, arm64 := virtualLoadLowerings(bits)
-		if err := reg.Compiler().Instruction(wago.InstructionSpec{
+		customType := customTypes[bits]
+		empty := []wago.CustomType{{}}
+		amd64, arm64 := customLoadLowerings(bits)
+		if err := compiler.Instruction(wago.InstructionSpec{
 			Module: InstructionModule, Name: "v" + itoa(int(bits)) + ".load",
-			Input: []int32{32}, Output: []int32{int32(bits)},
-			Virtual: &wago.VirtualSignature{Inputs: empty, Output: &virtualType},
-			AMD64:   amd64, ARM64: arm64,
+			Input:  []int32{32},
+			Custom: &wago.CustomSignature{Inputs: empty, Output: &customType},
+			AMD64:  amd64, ARM64: arm64,
 		}); err != nil {
 			return err
 		}
-		amd64, arm64 = virtualStoreLowerings(bits)
-		if err := reg.Compiler().Instruction(wago.InstructionSpec{
+		amd64, arm64 = customStoreLowerings(bits)
+		if err := compiler.Instruction(wago.InstructionSpec{
 			Module: InstructionModule, Name: "v" + itoa(int(bits)) + ".store",
-			Input:   []int32{int32(bits), 32},
-			Virtual: &wago.VirtualSignature{Inputs: []wago.VirtualType{virtualType, wago.VirtualType{}}},
-			AMD64:   amd64, ARM64: arm64,
+			Input:  []int32{0, 32},
+			Custom: &wago.CustomSignature{Inputs: []wago.CustomType{customType, wago.CustomType{}}},
+			AMD64:  amd64, ARM64: arm64,
 		}); err != nil {
 			return err
 		}

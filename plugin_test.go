@@ -67,6 +67,52 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 	}
 }
 
+func TestCarrierOptionControlsEveryCustomImport(t *testing.T) {
+	tests := []struct {
+		carrier wago.WasmType
+		want    wago.ValType
+	}{
+		{wago.WasmI32, wago.ValI32},
+		{wago.WasmI64, wago.ValI64},
+		{wago.WasmF32, wago.ValF32},
+		{wago.WasmF64, wago.ValF64},
+		{wago.WasmV128, wago.ValV128},
+		{wago.WasmFuncRef, wago.ValFuncRef},
+		{wago.WasmExternRef, wago.ValExternRef},
+	}
+	for _, tc := range tests {
+		t.Run(tc.want.String(), func(t *testing.T) {
+			rt := wago.NewRuntime()
+			if err := rt.Use(New(WithCarrier(tc.carrier))); err != nil {
+				t.Fatal(err)
+			}
+			seen := 0
+			for _, spec := range rt.ProvidedImports() {
+				if spec.Module != InstructionModule || strings.HasSuffix(spec.Name, ".memory") {
+					continue
+				}
+				for i, param := range spec.Params {
+					if spec.Name == "v256.load" || spec.Name == "v512.load" || i == len(spec.Params)-1 && (spec.Name == "v256.store" || spec.Name == "v512.store") {
+						continue
+					}
+					if param != tc.want {
+						t.Fatalf("%s parameter %d=%v, want %v", spec.Name, i, param, tc.want)
+					}
+				}
+				for _, result := range spec.Results {
+					if result != tc.want {
+						t.Fatalf("%s result=%v, want %v", spec.Name, result, tc.want)
+					}
+				}
+				seen++
+			}
+			if seen == 0 {
+				t.Fatal("no custom imports inspected")
+			}
+		})
+	}
+}
+
 func TestV256AndV512ImportsLowerNativelyAndExecute(t *testing.T) {
 	for _, bits := range []uint16{256, 512} {
 		t.Run(fmt.Sprintf("v%d", bits), func(t *testing.T) {
