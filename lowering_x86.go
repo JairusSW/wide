@@ -31,7 +31,7 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 	invert := func() {
 		m := allOnes(dst)
 		a.YPxor(dst, dst, m)
-		ctx.Release(m)
+		ctx.ReleaseVector(m)
 	}
 	signedCmp := func(op func(x86.Reg, x86.Reg, x86.Reg), swap, inv bool) {
 		left, right := dst, inputs[1]
@@ -47,14 +47,14 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 		bias := ctx.ConstYMMRepeated128(lo, hi)
 		a.YPxor(dst, dst, bias)
 		a.YPxor(inputs[1], inputs[1], bias)
-		ctx.Release(bias)
+		ctx.ReleaseVector(bias)
 		signedCmp(op, swap, inv)
 	}
 	integerNeg := func(op func(x86.Reg, x86.Reg, x86.Reg)) {
 		z := ctx.AllocYMM(dst)
 		a.YPxor(z, z, z)
 		op(dst, z, dst)
-		ctx.Release(z)
+		ctx.ReleaseVector(z)
 	}
 	v128FloatMinMax := func(f64, isMax bool) {
 		tmp := ctx.AllocYMM(dst, inputs[1])
@@ -82,8 +82,8 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 			a.VPsrldImm(cmp, cmp, 10)
 		}
 		a.VSseRRR(pp, 0x55, tmp, cmp, tmp)
-		ctx.Release(cmp)
-		ctx.Release(dst)
+		ctx.ReleaseVector(cmp)
+		ctx.ReleaseVector(dst)
 		dst = tmp
 	}
 	v128TruncSat := func(signed bool) {
@@ -114,10 +114,10 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 			a.VPxor(tmp, tmp, tmp)
 			a.VPmaxsd(tmp2, tmp2, tmp)
 			a.VPaddd(dst, dst, tmp2)
-			ctx.Release(tmp2)
-			ctx.Release(zero)
+			ctx.ReleaseVector(tmp2)
+			ctx.ReleaseVector(zero)
 		}
-		ctx.Release(tmp)
+		ctx.ReleaseVector(tmp)
 	}
 	switch opcode {
 	case 35:
@@ -196,7 +196,7 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 	case 79:
 		m := allOnes(dst, inputs[1])
 		a.YPxor(inputs[1], inputs[1], m)
-		ctx.Release(m)
+		ctx.ReleaseVector(m)
 		binary(a.YPand)
 	case 80:
 		binary(a.YPor)
@@ -220,9 +220,9 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 		a.VPshufb(dst, lut, dst)
 		a.VPshufb(hi, lut, hi)
 		a.VPaddb(dst, dst, hi)
-		ctx.Release(lut)
-		ctx.Release(mask)
-		ctx.Release(hi)
+		ctx.ReleaseVector(lut)
+		ctx.ReleaseVector(mask)
+		ctx.ReleaseVector(hi)
 	case 103, 104, 105, 106:
 		mode := [...]byte{0x02, 0x01, 0x03, 0x00}[opcode-103]
 		a.YFRoundPacked(dst, dst, false, mode)
@@ -260,13 +260,13 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 		} else {
 			a.VPmaddubsw(dst, dst, ones)
 		}
-		ctx.Release(ones)
+		ctx.ReleaseVector(ones)
 	case 126:
 		ones := ctx.AllocYMM(dst)
 		a.VPcmpeqw(ones, ones, ones)
 		a.VPsrlwImm(ones, ones, 15)
 		a.VPmaddwd(dst, dst, ones)
-		ctx.Release(ones)
+		ctx.ReleaseVector(ones)
 	case 127:
 		high := ctx.AllocYMM(dst)
 		zero := ctx.AllocYMM(dst, high)
@@ -275,8 +275,8 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 		a.VPunpcklwd(dst, dst, zero)
 		a.VPunpckhwd(high, high, zero)
 		a.VPhaddd(dst, dst, high)
-		ctx.Release(zero)
-		ctx.Release(high)
+		ctx.ReleaseVector(zero)
+		ctx.ReleaseVector(high)
 	case 128:
 		unary(a.YPabsw)
 	case 129:
@@ -333,7 +333,7 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 		a.YPcmpgtq(sign, sign, dst)
 		a.YPxor(dst, dst, sign)
 		a.YPsubq(dst, dst, sign)
-		ctx.Release(sign)
+		ctx.ReleaseVector(sign)
 	case 193:
 		integerNeg(a.YPsubq)
 	case 206:
@@ -351,8 +351,8 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 		a.YPsllqImm(cross, cross, 32)
 		a.YPmuludq(dst, dst, inputs[1])
 		a.YPaddq(dst, dst, cross)
-		ctx.Release(tmp)
-		ctx.Release(cross)
+		ctx.ReleaseVector(tmp)
+		ctx.ReleaseVector(cross)
 	case 214:
 		binary(a.YPcmpeqq)
 	case 215:
@@ -369,11 +369,11 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 	case 224:
 		mask := ctx.ConstYMMRepeated128(0x7fffffff7fffffff, 0x7fffffff7fffffff)
 		a.YSseRRR(0, 0x54, dst, dst, mask)
-		ctx.Release(mask)
+		ctx.ReleaseVector(mask)
 	case 225:
 		mask := ctx.ConstYMMRepeated128(0x8000000080000000, 0x8000000080000000)
 		a.YSseRRR(0, 0x57, dst, dst, mask)
-		ctx.Release(mask)
+		ctx.ReleaseVector(mask)
 	case 227:
 		a.YFPackedSqrt(dst, dst, false)
 	case 228:
@@ -395,11 +395,11 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 	case 236:
 		mask := ctx.ConstYMMRepeated128(0x7fffffffffffffff, 0x7fffffffffffffff)
 		a.YSseRRR(1, 0x54, dst, dst, mask)
-		ctx.Release(mask)
+		ctx.ReleaseVector(mask)
 	case 237:
 		mask := ctx.ConstYMMRepeated128(0x8000000000000000, 0x8000000000000000)
 		a.YSseRRR(1, 0x57, dst, dst, mask)
-		ctx.Release(mask)
+		ctx.ReleaseVector(mask)
 	case 239:
 		a.YFPackedSqrt(dst, dst, true)
 	case 240:
@@ -435,10 +435,10 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 		scale := ctx.ConstYMMRepeated128(0x4780000047800000, 0x4780000047800000)
 		a.VFPackedMul(high, high, scale, false)
 		a.VFPackedAdd(low, low, high, false)
-		ctx.Release(scale)
-		ctx.Release(high)
-		ctx.Release(mask)
-		ctx.Release(dst)
+		ctx.ReleaseVector(scale)
+		ctx.ReleaseVector(high)
+		ctx.ReleaseVector(mask)
+		ctx.ReleaseVector(dst)
 		dst = low
 	case 261, 263:
 		a.YFPackedMul(dst, dst, inputs[1], opcode == 263)
@@ -446,7 +446,7 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 	case 262, 264:
 		a.YFPackedMul(dst, dst, inputs[1], opcode == 264)
 		a.YFPackedSub(inputs[2], inputs[2], dst, opcode == 264)
-		ctx.Release(dst)
+		ctx.ReleaseVector(dst)
 		dst = inputs[2]
 		inputs[2] = inputs[0]
 	case 269:
@@ -466,24 +466,24 @@ func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 		a.VPsubb(inputs[1], inputs[1], sign)
 		a.VPabsb(abs, dst)
 		a.VPmaddubsw(dst, abs, inputs[1])
-		ctx.Release(abs)
-		ctx.Release(sign)
+		ctx.ReleaseVector(abs)
+		ctx.ReleaseVector(sign)
 		if opcode == 275 {
 			ones := ctx.AllocYMM(dst, inputs[2])
 			a.VPcmpeqw(ones, ones, ones)
 			a.VPsrlwImm(ones, ones, 15)
 			a.VPmaddwd(dst, dst, ones)
 			a.VPaddd(dst, dst, inputs[2])
-			ctx.Release(ones)
+			ctx.ReleaseVector(ones)
 		}
 	default:
 		for _, r := range inputs {
-			ctx.Release(r)
+			ctx.ReleaseVector(r)
 		}
 		return 0, unsupportedTarget("amd64", opcode)
 	}
 	for _, r := range inputs[1:] {
-		ctx.Release(r)
+		ctx.ReleaseVector(r)
 	}
 	return dst, nil
 }

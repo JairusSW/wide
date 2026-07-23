@@ -60,10 +60,10 @@ func emitARM64NEON(ctx wago.ARM64LoweringContext, opcode uint32, raw []uint8) (a
 		lo := ctx.AllocVector(append(inputs, t, aLo, bLo)...)
 		a.NeonUmullDfromS(lo, aLo, bLo)
 		a.NeonAddD(dst, t, lo)
-		ctx.Release(lo)
-		ctx.Release(bLo)
-		ctx.Release(aLo)
-		ctx.Release(t)
+		ctx.ReleaseVector(lo)
+		ctx.ReleaseVector(bLo)
+		ctx.ReleaseVector(aLo)
+		ctx.ReleaseVector(t)
 	}
 	dotI16 := func() {
 		lo := ctx.AllocVector(inputs...)
@@ -71,8 +71,8 @@ func emitARM64NEON(ctx wago.ARM64LoweringContext, opcode uint32, raw []uint8) (a
 		a.NeonSmullSfromH(lo, inputs[0], inputs[1])
 		a.NeonSmull2SfromH(hi, inputs[0], inputs[1])
 		a.NeonAddpS(dst, lo, hi)
-		ctx.Release(hi)
-		ctx.Release(lo)
+		ctx.ReleaseVector(hi)
+		ctx.ReleaseVector(lo)
 	}
 	relaxedDot := func(add bool) {
 		lo := ctx.AllocVector(inputs...)
@@ -87,8 +87,8 @@ func emitARM64NEON(ctx wago.ARM64LoweringContext, opcode uint32, raw []uint8) (a
 			a.NeonSaddlpSfromH(dst, dst)
 			a.NeonAddS(dst, dst, inputs[2])
 		}
-		ctx.Release(hi)
-		ctx.Release(lo)
+		ctx.ReleaseVector(hi)
+		ctx.ReleaseVector(lo)
 	}
 
 	switch opcode {
@@ -393,13 +393,13 @@ func emitARM64NEON(ctx wago.ARM64LoweringContext, opcode uint32, raw []uint8) (a
 		relaxedDot(true)
 	default:
 		for _, r := range inputs {
-			ctx.Release(r)
+			ctx.ReleaseVector(r)
 		}
 		return 0, unsupportedTarget("arm64", opcode)
 	}
 	for _, r := range inputs {
 		if r != dst {
-			ctx.Release(r)
+			ctx.ReleaseVector(r)
 		}
 	}
 	return dst, nil

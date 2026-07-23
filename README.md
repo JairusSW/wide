@@ -33,8 +33,9 @@
 
 `wide` is an optional [Wago](https://github.com/wago-org/wago) compiler plugin
 that turns architecture-neutral v256 and v512 imports into native wide-SIMD
-machine code. Guest modules expose ordinary, validated i32 function imports;
-Wide selects AVX-512/ZMM, AVX2/YMM, or NEON without exposing physical
+machine code. Guest modules expose ordinary, validated function imports;
+operation results use compiler-erased `externref` carriers so expression chains
+stay in registers. Wide selects AVX-512/ZMM, AVX2/YMM, or NEON without exposing physical
 registers or target mnemonics to Wasm.
 
 What you get out of the box:
@@ -46,13 +47,16 @@ What you get out of the box:
   NEON chunks.
 - **Checked memory access**: each pointer is validated for the complete vector
   width before any destination bytes are written.
+- **Register-resident expressions**: `externref` is erased by Wago during
+  compilation; it never allocates a host object or enters the runtime reference
+  store.
 - **Wasm-SIMD semantics**: the catalog mirrors unary, binary, and ternary
   standard and relaxed SIMD kernels at 256- and 512-bit widths.
 - **Language-neutral integration**: any compiler or hand-written Wasm module
   can call Wide with ordinary function imports. No custom section or custom
   Wasm type is required.
 
-> **Stability:** experimental (`v0.1.1`). The plugin ABI and backend selection
+> **Stability:** experimental (`v0.2.0`). The plugin ABI and backend selection
 > policy may change before `v1.0.0`.
 
 ## Installation
@@ -97,8 +101,12 @@ adds two vectors of eight i32 lanes:
 
 ```wat
 (module
+  (import "as-simd" "v256.load"
+    (func $v256.load (param i32) (result externref)))
   (import "as-simd" "i32x8.add"
-    (func $i32x8.add (param i32 i32 i32)))
+    (func $i32x8.add (param externref externref) (result externref)))
+  (import "as-simd" "v256.store"
+    (func $v256.store (param externref i32)))
 
   (memory (export "memory") 1)
 
@@ -113,16 +121,22 @@ adds two vectors of eight i32 lanes:
     "\32\00\00\00\3c\00\00\00\46\00\00\00\50\00\00\00")
 
   (func (export "run")
-    i32.const 0   ;; destination
     i32.const 32  ;; left vector
+    call $v256.load
     i32.const 64  ;; right vector
-    call $i32x8.add))
+    call $v256.load
+    call $i32x8.add
+    i32.const 0   ;; destination
+    call $v256.store))
 ```
 
-The import is a normal `(i32, i32, i32) -> ()` Wasm function. Its three
-arguments are byte offsets into linear memory: destination, left input, and
-right input. `"as-simd"` is only the historical guest ABI namespace; this
-example does not install or run the `as-simd` package or transform.
+These are standard Wasm imports using standard `i32` and `externref` types.
+`v256.load` turns a checked linear-memory range into a compiler-erased vector,
+`i32x8.add` consumes and returns erased vectors, and `v256.store` writes the
+result. Under Wago the `externref` values are native register bundles, not
+runtime references, so this sequence performs two vector loads, one native add,
+and one vector store. `"as-simd"` is only the historical guest ABI namespace;
+this example does not install or run the `as-simd` package or transform.
 
 Compile and run the checked-in example:
 
@@ -194,8 +208,8 @@ imports. Without it, they remain ordinary unresolved Wasm imports. An already
 compiled native artifact does not need the plugin to execute.
 
 To use a different operation or width, change the semantic import name and
-pointer ranges. v256 operations read and write 32 bytes; v512 operations read
-and write 64 bytes. The complete naming pattern is described in
+load/store width. v256 loads and stores 32 bytes; v512 loads and stores 64
+bytes. The complete naming pattern is described in
 [Instruction ABI](#instruction-abi).
 
 ### From AssemblyScript
@@ -229,16 +243,32 @@ portable v128-backed implementation and omit Wide imports.
 
 ## Instruction ABI
 
-Every operation is an ordinary Wasm import with a pointer-only physical
-signature:
+Every semantic operation is an ordinary Wasm import. The default carrier `C`
+is `externref`:
 
 | Shape | Wasm signature |
 | --- | --- |
-| Unary | `(dst: i32, input: i32) -> ()` |
-| Binary | `(dst: i32, left: i32, right: i32) -> ()` |
-| Ternary | `(dst: i32, a: i32, b: i32, c: i32) -> ()` |
+| Load | `(address: i32) -> C` |
+| Unary | `(input: C) -> C` |
+| Binary | `(left: C, right: C) -> C` |
+| Ternary | `(a: C, b: C, c: C) -> C` |
+| Store | `(value: C, address: i32) -> ()` |
 
-Pointers address 32 bytes for v256 operations and 64 bytes for v512 operations.
+An embedder may instead select `i32`, `i64`, `f32`, `f64`, `v128`, or
+`funcref`. The guest and plugin must use the same carrier:
+
+```go
+if err := rt.Use(wide.New(wide.WithCarrier(wago.WasmV128))); err != nil {
+	panic(err)
+}
+```
+
+For AssemblyScript, pair that with `AS_SIMD_WIDE_CARRIER=v128` when invoking
+the `as-simd` transform. Selecting a carrier changes only the module's
+validation signature. Wago still assigns the registered `wide.v256` or
+`wide.v512` identity and rejects ordinary values of the same Wasm type at a
+custom-instruction boundary.
+
 Import names scale standard SIMD lane shapes to the selected width:
 
 | Standard shape | v256 import | v512 import |
@@ -254,6 +284,18 @@ Import names scale standard SIMD lane shapes to the selected width:
 Wago validates each imported physical signature before code generation. The
 guest never observes AVX opcodes, YMM/ZMM registers, NEON registers, numeric
 `0xfd` subopcodes, or encoder details.
+
+Erased custom values have expression lifetime: nest them directly through Wide
+imports, then store or drop the result. They cannot be put in Wasm locals,
+returned from guest functions, passed to ordinary functions, or carried across
+control flow. Wago rejects those escapes at compilation instead of silently
+materializing them.
+
+For low-level compatibility, every semantic operation also has a `.memory`
+form with the former pointer ABI: unary is `(dst, input)`, binary is
+`(dst, left, right)`, and ternary is `(dst, a, b, c)`, all `i32` parameters and
+no result. That form is useful as a single-operation boundary but reloads and
+stores between chained operations.
 
 ## Native backends
 
@@ -284,7 +326,7 @@ These switches are diagnostic controls, not guest-visible ABI.
 | Wago engine | `>= 0.1.0` |
 | Go toolchain | `>= 1.22` |
 | TinyGo toolchain | `>= 0.41.1`; build Wago hosts with `-scheduler=tasks` |
-| Guest ABI | ordinary i32 Wasm imports under `"as-simd"` |
+| Guest ABI | standard `i32` and `externref` Wasm imports under `"as-simd"`; optional pointer-only `.memory` imports |
 | `linux/amd64` | AVX2 required; AVX-512F/DQ/BW selected when available and profitable |
 | `linux/arm64` | NEON |
 | Producer | `as-simd` transform; any language may emit the same imports |
@@ -303,10 +345,22 @@ strategies:
 - `i64x8.mul`: 1.248 ns/op with direct AVX-512 versus 1.551 ns/op through the
   AVX2 sequence, so Wago selects ZMM for a 19.5% improvement.
 
+A dependent chain of 128 `not` operations demonstrates the cost removed by the
+erased-reference ABI. Median results over five benchmark runs were:
+
+| Width | `.memory` round trip per operation | register-resident `externref` | Speedup |
+| --- | ---: | ---: | ---: |
+| v256 | 2.568 ns/op | 0.447 ns/op | 5.74x |
+| v512 | 2.796 ns/op | 0.512 ns/op | 5.46x |
+
+Both paths report zero Go allocations. The difference is native linear-memory
+traffic: the `externref` chain loads once, remains in vector registers for all
+128 operations, and stores once.
+
 Run the benchmarks locally:
 
 ```sh
-go test -run '^$' -bench 'Benchmark(WideSIMDWrapper|V512I64Mul)$' -benchmem
+go test -run '^$' -bench 'Benchmark(WideSIMDWrapper|V512I64Mul|ExternrefExpressionChain)$' -benchmem
 ```
 
 ## Testing
@@ -321,6 +375,7 @@ The self-contained suite:
 - rejects mismatched physical import signatures;
 - checks full-width bounds before destination mutation;
 - compiles every semantic import through the native backend;
+- executes dependent erased-reference chains without intermediate memory;
 - byte-compares direct ZMM output with the YMM fallback;
 - executes representative v256 and v512 modules end to end.
 
@@ -356,6 +411,12 @@ AVX2, and NEON lowering. Wago owns validation, checked-address construction,
 register allocation, and raw target encoders. This keeps machine-code access
 out of the guest ABI and makes the same Wasm module portable across supported
 hosts without placing Wide-specific semantics in Wago.
+
+At registration, Wide declares `wide.v256` and `wide.v512` through Wago's
+custom-type registry. `WasmExternRef` is the default carrier; the registered
+identity and native register bundles are compiler-only. Wide and other plugins
+may instead select `WasmI32`, `WasmI64`, `WasmF32`, `WasmF64`, `WasmV128`, or
+`WasmFuncRef` without changing Wago's instruction-lowering interface.
 
 ## Contributing
 

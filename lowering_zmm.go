@@ -188,7 +188,7 @@ func emitAMD64ZMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x8
 		}
 	}
 	for _, reg := range inputs[1:] {
-		ctx.Release(reg)
+		ctx.ReleaseVector(reg)
 	}
 	return dst, nil
 }
