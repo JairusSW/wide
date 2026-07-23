@@ -10,6 +10,6 @@
   "repository": "https://github.com/JairusSW/wide",
   "authors": ["Jairus Tanaka"],
   "keywords": ["simd", "avx512", "avx2", "neon", "assemblyscript", "compiler"],
-  "engines": { "wago": ">=0.1.0", "go": ">=1.22" },
+  "engines": { "wago": ">=0.1.0", "go": ">=1.22", "tinygo": ">=0.41.1" },
   "platforms": ["linux/amd64", "linux/arm64"]
 }

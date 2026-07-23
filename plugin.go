@@ -25,8 +25,11 @@ func (extension) Info() wago.ExtensionInfo {
 		Description: "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering",
 		Stability:   wago.Experimental, License: "MIT",
 		Homepage: "https://github.com/JairusSW/wide", Repository: "https://github.com/JairusSW/wide",
-		Tags:   []string{"simd", "avx512", "avx2", "neon", "assemblyscript", "compiler"},
-		Compat: wago.Compatibility{Engines: map[string]string{"wago": ">=0.1.0", "go": ">=1.22"}, Platforms: []string{"linux/amd64", "linux/arm64"}},
+		Tags: []string{"simd", "avx512", "avx2", "neon", "assemblyscript", "compiler"},
+		Compat: wago.Compatibility{
+			Engines:   map[string]string{"wago": ">=0.1.0", "go": ">=1.22", "tinygo": ">=0.41.1"},
+			Platforms: []string{"linux/amd64", "linux/arm64"},
+		},
 	}
 }
 

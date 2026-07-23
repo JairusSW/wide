@@ -25,3 +25,25 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./...
       - name: Cross-compile arm64 tests
         run: GOOS=linux GOARCH=arm64 go test -c -o wide.test .
+
+  tinygo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+      - uses: acifani/setup-tinygo@v2
+        with:
+          tinygo-version: "0.41.1"
+          install-binaryen: false
+      - name: Install native linker and WABT
+        run: sudo apt-get update && sudo apt-get install -y lld wabt
+      - name: Build and run raw example
+        run: |
+          wat2wasm examples/raw/add.wat -o /tmp/wide-add.wasm
+          tinygo build -scheduler=tasks -o /tmp/wide-host ./examples/raw
+          test "$(/tmp/wide-host /tmp/wide-add.wasm)" = "[11 22 33 44 55 66 77 88]"
+      - name: Cross-compile arm64 host
+        run: GOOS=linux GOARCH=arm64 tinygo build -scheduler=tasks -o /tmp/wide-host-arm64 ./examples/raw

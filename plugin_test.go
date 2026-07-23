@@ -1,3 +1,5 @@
+//go:build !tinygo
+
 package wide
 
 import (
@@ -7,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	wago "github.com/wago-org/wago"
 )
@@ -317,12 +320,14 @@ func BenchmarkWideSIMDWrapper(b *testing.B) {
 			defer instance.Close()
 			b.ReportAllocs()
 			b.ResetTimer()
+			start := time.Now()
 			for i := 0; i < b.N; i++ {
 				if _, err := instance.Invoke("run", wago.I32(iterations)); err != nil {
 					b.Fatal(err)
 				}
 			}
-			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(iterations), "ns/wide-op")
+			elapsed := time.Since(start)
+			b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N)/float64(iterations), "ns/wide-op")
 		})
 	}
 }
@@ -344,12 +349,14 @@ func BenchmarkV512I64Mul(b *testing.B) {
 	defer instance.Close()
 	b.ReportAllocs()
 	b.ResetTimer()
+	start := time.Now()
 	for i := 0; i < b.N; i++ {
 		if _, err := instance.Invoke("run", wago.I32(iterations)); err != nil {
 			b.Fatal(err)
 		}
 	}
-	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/iterations, "ns/wide-op")
+	elapsed := time.Since(start)
+	b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N)/iterations, "ns/wide-op")
 }
 
 func kernelImportModule(bits uint16, sub uint32, arity int) []byte {

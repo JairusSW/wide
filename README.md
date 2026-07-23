@@ -283,6 +283,7 @@ These switches are diagnostic controls, not guest-visible ABI.
 | --- | --- |
 | Wago engine | `>= 0.1.0` |
 | Go toolchain | `>= 1.22` |
+| TinyGo toolchain | `>= 0.41.1`; build Wago hosts with `-scheduler=tasks` |
 | Guest ABI | ordinary i32 Wasm imports under `"as-simd"` |
 | `linux/amd64` | AVX2 required; AVX-512F/DQ/BW selected when available and profitable |
 | `linux/arm64` | NEON |
