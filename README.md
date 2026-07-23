@@ -15,7 +15,7 @@
 - [Overview](#overview)
 - [Installation](#installation)
 - [Usage](#usage)
-  - [On a Runtime](#on-a-runtime)
+  - [Raw Wasm quick start](#raw-wasm-quick-start)
   - [From AssemblyScript](#from-assemblyscript)
 - [Instruction ABI](#instruction-abi)
 - [Native backends](#native-backends)
@@ -48,9 +48,9 @@ What you get out of the box:
   width before any destination bytes are written.
 - **Wasm-SIMD semantics**: the catalog mirrors unary, binary, and ternary
   standard and relaxed SIMD kernels at 256- and 512-bit widths.
-- **AssemblyScript integration**: the
-  [`as-simd`](https://github.com/JairusSW/as-simd) transform emits the imports
-  automatically from ordinary `v256` and `v512` source.
+- **Language-neutral integration**: any compiler or hand-written Wasm module
+  can call Wide with ordinary function imports. No custom section or custom
+  Wasm type is required.
 
 > **Stability:** experimental (`v0.1.0`). The plugin ABI and backend selection
 > policy may change before `v1.0.0`.
@@ -90,22 +90,75 @@ manifest grant.
 
 ## Usage
 
-### On a Runtime
+### Raw Wasm quick start
 
-Register the extension before compiling a module that imports Wide
-instructions:
+Wide does not require AssemblyScript or `as-simd`. This complete WAT module
+adds two vectors of eight i32 lanes:
+
+```wat
+(module
+  (import "as-simd" "i32x8.add"
+    (func $i32x8.add (param i32 i32 i32)))
+
+  (memory (export "memory") 1)
+
+  ;; Eight little-endian i32 values: [1, 2, 3, 4, 5, 6, 7, 8].
+  (data (i32.const 32)
+    "\01\00\00\00\02\00\00\00\03\00\00\00\04\00\00\00"
+    "\05\00\00\00\06\00\00\00\07\00\00\00\08\00\00\00")
+
+  ;; Eight little-endian i32 values: [10, 20, 30, 40, 50, 60, 70, 80].
+  (data (i32.const 64)
+    "\0a\00\00\00\14\00\00\00\1e\00\00\00\28\00\00\00"
+    "\32\00\00\00\3c\00\00\00\46\00\00\00\50\00\00\00")
+
+  (func (export "run")
+    i32.const 0   ;; destination
+    i32.const 32  ;; left vector
+    i32.const 64  ;; right vector
+    call $i32x8.add))
+```
+
+The import is a normal `(i32, i32, i32) -> ()` Wasm function. Its three
+arguments are byte offsets into linear memory: destination, left input, and
+right input. `"as-simd"` is only the historical guest ABI namespace; this
+example does not install or run the `as-simd` package or transform.
+
+Compile and run the checked-in example:
+
+```sh
+wat2wasm examples/raw/add.wat -o add.wasm
+go run ./examples/raw add.wasm
+```
+
+Output:
+
+```text
+[11 22 33 44 55 66 77 88]
+```
+
+The host is ordinary Go:
 
 ```go
 package main
 
 import (
+	"context"
+	"encoding/binary"
+	"fmt"
 	"log"
+	"os"
 
 	"github.com/JairusSW/wide"
 	wago "github.com/wago-org/wago"
 )
 
 func main() {
+	wasmBytes, err := os.ReadFile("add.wasm")
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	rt := wago.NewRuntime()
 	if err := rt.Use(wide.New()); err != nil {
 		log.Fatal(err)
@@ -117,17 +170,33 @@ func main() {
 		log.Fatal(err)
 	}
 
-	instance, err := rt.Instantiate(ctx, mod)
+	instance, err := rt.Instantiate(context.Background(), mod)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer instance.Close()
+
+	if _, err := instance.Invoke("run"); err != nil {
+		log.Fatal(err)
+	}
+
+	memory := instance.Memory().Bytes()
+	lanes := make([]uint32, 8)
+	for i := range lanes {
+		lanes[i] = binary.LittleEndian.Uint32(memory[i*4:])
+	}
+	fmt.Println(lanes)
 }
 ```
 
 Registering the plugin before compilation lets Wago recognize and lower these
 imports. Without it, they remain ordinary unresolved Wasm imports. An already
 compiled native artifact does not need the plugin to execute.
+
+To use a different operation or width, change the semantic import name and
+pointer ranges. v256 operations read and write 32 bytes; v512 operations read
+and write 64 bytes. The complete naming pattern is described in
+[Instruction ABI](#instruction-abi).
 
 ### From AssemblyScript
 
