@@ -1,0 +1,15 @@
+{
+  "schema": "wago-plugin/v1",
+  "module": "github.com/JairusSW/wide",
+  "name": "Wide",
+  "version": "0.1.0",
+  "description": "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering.",
+  "stability": "experimental",
+  "license": "MIT",
+  "homepage": "https://github.com/JairusSW/wide",
+  "repository": "https://github.com/JairusSW/wide",
+  "authors": ["Jairus Tanaka"],
+  "keywords": ["simd", "avx512", "avx2", "neon", "assemblyscript", "compiler"],
+  "engines": { "wago": ">=0.1.0", "go": ">=1.22" },
+  "platforms": ["linux/amd64", "linux/arm64"]
+}
