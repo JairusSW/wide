@@ -55,8 +55,9 @@ func TestV256AndV512ImportsLowerNativelyAndExecute(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := mod.Compiled().RequiresAVX2(); got != (runtime.GOARCH == "amd64") {
-				t.Fatalf("RequiresAVX2=%v on %s", got, runtime.GOARCH)
+			requiresWide := mod.Compiled().RequiresAVX2() || mod.Compiled().RequiresAVX512()
+			if requiresWide != (runtime.GOARCH == "amd64") {
+				t.Fatalf("native amd64 SIMD requirement=%v on %s", requiresWide, runtime.GOARCH)
 			}
 			in, err := rt.Instantiate(context.Background(), mod)
 			if err != nil {
