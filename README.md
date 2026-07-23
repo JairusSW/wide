@@ -34,7 +34,7 @@
 `wide` is an optional [Wago](https://github.com/wago-org/wago) compiler plugin
 that turns architecture-neutral v256 and v512 imports into native wide-SIMD
 machine code. Guest modules expose ordinary, validated i32 function imports;
-Wago privately selects AVX-512/ZMM, AVX2/YMM, or NEON without exposing physical
+Wide selects AVX-512/ZMM, AVX2/YMM, or NEON without exposing physical
 registers or target mnemonics to Wasm.
 
 What you get out of the box:
@@ -52,7 +52,7 @@ What you get out of the box:
   can call Wide with ordinary function imports. No custom section or custom
   Wasm type is required.
 
-> **Stability:** experimental (`v0.1.0`). The plugin ABI and backend selection
+> **Stability:** experimental (`v0.1.1`). The plugin ABI and backend selection
 > policy may change before `v1.0.0`.
 
 ## Installation
@@ -263,7 +263,7 @@ guest never observes AVX opcodes, YMM/ZMM registers, NEON registers, numeric
 | amd64 with AVX2 | one YMM operation | two YMM operations |
 | arm64 | two NEON chunks | four NEON chunks |
 
-Wago chooses full-width instructions when they reduce work. On CPUs that
+Wide chooses full-width instructions when they reduce work. On CPUs that
 execute 512-bit operations as 256-bit halves, its cost model keeps simple
 operations on YMM and reserves ZMM for instruction-collapsing wins such as
 bitselect and `i64x8.mul`.
@@ -272,8 +272,8 @@ Two environment switches support differential testing:
 
 | Variable | Effect |
 | --- | --- |
-| `WAGO_DISABLE_AVX512=1` | Force the AVX2/YMM v512 fallback |
-| `WAGO_FORCE_AVX512=1` | Force every available direct ZMM lowering |
+| `WIDE_DISABLE_AVX512=1` | Force the AVX2/YMM v512 fallback |
+| `WIDE_FORCE_AVX512=1` | Force every available direct ZMM lowering |
 
 These switches are diagnostic controls, not guest-visible ABI.
 
@@ -340,6 +340,10 @@ cross-compile.
   neutral instruction declarations.
 - **`catalog.go`** - canonical Wasm-SIMD semantic names, operation shapes, lane
   scaling, and pointer arity.
+- **`lowering_x86.go`** - AVX2/YMM and SSE-width semantic lowering.
+- **`lowering_zmm.go`** - AVX-512 encodings and Wide's ZMM selection policy.
+- **`lowering_neon.go`** - complete arm64 NEON semantic lowering.
+- **`lowering.go`** - checked full-vector memory access and target adapters.
 - **`plugin_test.go`** - catalog, validation, backend-selection, execution, and
   benchmark coverage.
 - **`emitted_integration_test.go`** - optional end-to-end coverage for a real
@@ -347,10 +351,11 @@ cross-compile.
 - **`wago.json`** - package manifest for registry identity, engine
   compatibility, and supported platforms.
 
-Wide owns the semantic import catalog. Wago owns validation, checked addresses,
-CPU feature detection, register allocation, and target-specific lowering. This
-keeps machine-code access out of the guest ABI and makes the same Wasm module
-portable across supported hosts.
+Wide owns the semantic import catalog, CPU-feature policy, and all AVX-512,
+AVX2, and NEON lowering. Wago owns validation, checked-address construction,
+register allocation, and raw target encoders. This keeps machine-code access
+out of the guest ABI and makes the same Wasm module portable across supported
+hosts without placing Wide-specific semantics in Wago.
 
 ## Contributing
 

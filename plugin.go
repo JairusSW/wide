@@ -1,6 +1,6 @@
 // Package wide provides architecture-neutral v256 and v512 instruction
 // declarations for Wago. Guest modules use ordinary validated i32 imports;
-// Wago selects the fastest native SIMD lowering available on the host.
+// Wide selects the fastest native SIMD lowering available on the host.
 package wide
 
 import (
@@ -21,7 +21,7 @@ func New() wago.Extension { return extension{} }
 
 func (extension) Info() wago.ExtensionInfo {
 	return wago.ExtensionInfo{
-		ID: PluginID, Name: "Wide", Version: "0.1.0",
+		ID: PluginID, Name: "Wide", Version: "0.1.1",
 		Description: "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering",
 		Stability:   wago.Experimental, License: "MIT",
 		Homepage: "https://github.com/JairusSW/wide", Repository: "https://github.com/JairusSW/wide",
@@ -54,12 +54,14 @@ func (extension) Register(reg *wago.Registry) error {
 			}
 			width, opcode := bits, sub
 			name, _ := instructionName(width, opcode)
+			amd64, arm64 := targetLowerings(width, opcode, arity)
 			err := reg.Compiler().Instruction(wago.InstructionSpec{
 				Module: InstructionModule, Name: name, Input: inputs,
 				Handler: func(_ wago.InstructionContext, _ []wago.Bits) ([]wago.Bits, error) {
 					return nil, fmt.Errorf("as-simd instruction %s requires a native SIMD backend", name)
 				},
-				SIMD: &wago.SIMDInstruction{Width: width, Subopcode: opcode, Arity: uint8(arity)},
+				AMD64: amd64,
+				ARM64: arm64,
 			})
 			if err != nil {
 				return err

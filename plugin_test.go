@@ -97,7 +97,7 @@ func TestV512FallsBackWhenAVX512Disabled(t *testing.T) {
 	if runtime.GOARCH != "amd64" {
 		t.Skip("amd64-only selection")
 	}
-	t.Setenv("WAGO_DISABLE_AVX512", "1")
+	t.Setenv("WIDE_DISABLE_AVX512", "1")
 	rt := wago.NewRuntime()
 	if err := rt.Use(New()); err != nil {
 		t.Fatal(err)
@@ -122,18 +122,18 @@ func TestV512ZMMMatchesYMMFallback(t *testing.T) {
 		227, 228, 229, 230, 231, 234, 235, 239, 240, 241, 242, 243, 246, 247,
 		265, 266, 267, 268, 269, 270, 271, 272, 273,
 	}
-	old, hadOld := os.LookupEnv("WAGO_DISABLE_AVX512")
-	oldForce, hadForce := os.LookupEnv("WAGO_FORCE_AVX512")
+	old, hadOld := os.LookupEnv("WIDE_DISABLE_AVX512")
+	oldForce, hadForce := os.LookupEnv("WIDE_FORCE_AVX512")
 	defer func() {
 		if hadOld {
-			_ = os.Setenv("WAGO_DISABLE_AVX512", old)
+			_ = os.Setenv("WIDE_DISABLE_AVX512", old)
 		} else {
-			_ = os.Unsetenv("WAGO_DISABLE_AVX512")
+			_ = os.Unsetenv("WIDE_DISABLE_AVX512")
 		}
 		if hadForce {
-			_ = os.Setenv("WAGO_FORCE_AVX512", oldForce)
+			_ = os.Setenv("WIDE_FORCE_AVX512", oldForce)
 		} else {
-			_ = os.Unsetenv("WAGO_FORCE_AVX512")
+			_ = os.Unsetenv("WIDE_FORCE_AVX512")
 		}
 	}()
 	for _, sub := range direct {
@@ -153,11 +153,11 @@ func TestV512ZMMMatchesYMMFallback(t *testing.T) {
 			}
 			compile := func(disable bool) compiled {
 				if disable {
-					_ = os.Setenv("WAGO_DISABLE_AVX512", "1")
-					_ = os.Unsetenv("WAGO_FORCE_AVX512")
+					_ = os.Setenv("WIDE_DISABLE_AVX512", "1")
+					_ = os.Unsetenv("WIDE_FORCE_AVX512")
 				} else {
-					_ = os.Unsetenv("WAGO_DISABLE_AVX512")
-					_ = os.Setenv("WAGO_FORCE_AVX512", "1")
+					_ = os.Unsetenv("WIDE_DISABLE_AVX512")
+					_ = os.Setenv("WIDE_FORCE_AVX512", "1")
 				}
 				rt := wago.NewRuntime()
 				if err := rt.Use(New()); err != nil {
