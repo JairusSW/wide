@@ -1,6 +1,10 @@
 (module
+  (import "as-simd" "v256.load"
+    (func $v256.load (param i32) (result externref)))
   (import "as-simd" "i32x8.add"
-    (func $i32x8.add (param i32 i32 i32)))
+    (func $i32x8.add (param externref externref) (result externref)))
+  (import "as-simd" "v256.store"
+    (func $v256.store (param externref i32)))
 
   (memory (export "memory") 1)
 
@@ -15,7 +19,10 @@
     "\32\00\00\00\3c\00\00\00\46\00\00\00\50\00\00\00")
 
   (func (export "run")
-    i32.const 0
     i32.const 32
+    call $v256.load
     i32.const 64
-    call $i32x8.add))
+    call $v256.load
+    call $i32x8.add
+    i32.const 0
+    call $v256.store))

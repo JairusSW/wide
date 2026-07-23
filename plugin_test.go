@@ -20,7 +20,7 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	imports := rt.ProvidedImports()
-	want := len(canonicalNames) * 2
+	want := len(canonicalNames)*4 + 4
 	// Three wago:abi lifecycle imports accompany every custom-instruction plugin.
 	if got := len(imports) - 3; got != want {
 		t.Fatalf("registered instructions=%d, want %d", got, want)
@@ -35,12 +35,33 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 		if strings.Contains(spec.Name, ".fd.") {
 			t.Fatalf("%s exposes an engine opcode instead of a SIMD semantic name", spec.Name)
 		}
-		if len(spec.Results) != 0 {
-			t.Fatalf("%s returns values", spec.Name)
-		}
-		for _, typ := range spec.Params {
-			if typ != wago.ValI32 {
-				t.Fatalf("%s has non-i32 parameter", spec.Name)
+		if strings.HasSuffix(spec.Name, ".memory") {
+			if len(spec.Results) != 0 {
+				t.Fatalf("%s returns values", spec.Name)
+			}
+			for _, typ := range spec.Params {
+				if typ != wago.ValI32 {
+					t.Fatalf("%s has non-i32 memory parameter", spec.Name)
+				}
+			}
+		} else if strings.HasSuffix(spec.Name, ".load") {
+			if len(spec.Params) != 1 || spec.Params[0] != wago.ValI32 ||
+				len(spec.Results) != 1 || spec.Results[0] != wago.ValExternRef {
+				t.Fatalf("%s has physical signature %v -> %v, want [i32] -> [externref]", spec.Name, spec.Params, spec.Results)
+			}
+		} else if strings.HasSuffix(spec.Name, ".store") {
+			if len(spec.Params) != 2 || spec.Params[0] != wago.ValExternRef || spec.Params[1] != wago.ValI32 ||
+				len(spec.Results) != 0 {
+				t.Fatalf("%s has physical signature %v -> %v, want [externref i32] -> []", spec.Name, spec.Params, spec.Results)
+			}
+		} else {
+			if len(spec.Params) == 0 || len(spec.Results) != 1 || spec.Results[0] != wago.ValExternRef {
+				t.Fatalf("%s has physical signature %v -> %v, want externref operands and result", spec.Name, spec.Params, spec.Results)
+			}
+			for _, typ := range spec.Params {
+				if typ != wago.ValExternRef {
+					t.Fatalf("%s has non-externref operand %v", spec.Name, typ)
+				}
 			}
 		}
 	}
@@ -80,6 +101,75 @@ func TestV256AndV512ImportsLowerNativelyAndExecute(t *testing.T) {
 				want := byte(i*3+1) ^ byte(255-i*5)
 				if memory[i] != want {
 					t.Fatalf("byte %d=%#x, want %#x", i, memory[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestExternrefVectorsStayNativeAcrossExpressionChain(t *testing.T) {
+	for _, bits := range []uint16{256, 512} {
+		t.Run(fmt.Sprintf("v%d", bits), func(t *testing.T) {
+			wasm := virtualKernelModule(bits, 81, 2)
+			rt := wago.NewRuntime()
+			if err := rt.Use(New()); err != nil {
+				t.Fatal(err)
+			}
+			mod, err := rt.Compile(wasm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in, err := rt.Instantiate(context.Background(), mod)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer in.Close()
+			memory := in.Memory().Bytes()
+			n := int(bits / 8)
+			for i := 0; i < n; i++ {
+				memory[64+i] = byte(i*3 + 1)
+				memory[128+i] = byte(255 - i*5)
+			}
+			if _, err := in.Invoke("run", wago.I32(0), wago.I32(64), wago.I32(128)); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < n; i++ {
+				want := byte(i*3+1) ^ byte(255-i*5)
+				if memory[i] != want {
+					t.Fatalf("byte %d=%#x, want %#x", i, memory[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestExternrefExpressionChainAvoidsIntermediateMemory(t *testing.T) {
+	const depth = 8
+	for _, bits := range []uint16{256, 512} {
+		t.Run(fmt.Sprintf("v%d", bits), func(t *testing.T) {
+			rt := wago.NewRuntime()
+			if err := rt.Use(New()); err != nil {
+				t.Fatal(err)
+			}
+			mod, err := rt.Compile(unaryChainModule(bits, 77, depth, true)) // v128.not
+			if err != nil {
+				t.Fatal(err)
+			}
+			in, err := rt.Instantiate(context.Background(), mod)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer in.Close()
+			memory := in.Memory().Bytes()
+			for i := 0; i < int(bits/8); i++ {
+				memory[64+i] = byte(i*37 + 11)
+			}
+			if _, err := in.Invoke("run"); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < int(bits/8); i++ {
+				if got, want := memory[i], memory[64+i]; got != want {
+					t.Fatalf("byte %d=%#x, want %#x", i, got, want)
 				}
 			}
 		})
@@ -288,13 +378,21 @@ func TestEverySemanticImportCompilesNatively(t *testing.T) {
 		for _, bits := range []uint16{256, 512} {
 			name, _ := instructionName(bits, sub)
 			t.Run(name, func(t *testing.T) {
-				mod, err := rt.Compile(kernelImportModule(bits, sub, arity+1))
-				if err != nil {
-					t.Fatal(err)
-				}
-				requiresWide := mod.Compiled().RequiresAVX2() || mod.Compiled().RequiresAVX512()
-				if requiresWide != (runtime.GOARCH == "amd64") {
-					t.Fatalf("native amd64 SIMD requirement=%v on %s", requiresWide, runtime.GOARCH)
+				for _, tc := range []struct {
+					name string
+					wasm []byte
+				}{
+					{"memory", kernelImportModule(bits, sub, arity+1)},
+					{"externref", virtualKernelModule(bits, sub, arity)},
+				} {
+					mod, err := rt.Compile(tc.wasm)
+					if err != nil {
+						t.Fatalf("%s: %v", tc.name, err)
+					}
+					requiresWide := mod.Compiled().RequiresAVX2() || mod.Compiled().RequiresAVX512()
+					if requiresWide != (runtime.GOARCH == "amd64") {
+						t.Fatalf("%s: native amd64 SIMD requirement=%v on %s", tc.name, requiresWide, runtime.GOARCH)
+					}
 				}
 			})
 		}
@@ -329,6 +427,43 @@ func BenchmarkWideSIMDWrapper(b *testing.B) {
 			elapsed := time.Since(start)
 			b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N)/float64(iterations), "ns/wide-op")
 		})
+	}
+}
+
+func BenchmarkExternrefExpressionChain(b *testing.B) {
+	const depth = 128
+	for _, bits := range []uint16{256, 512} {
+		for _, virtual := range []bool{false, true} {
+			name := "memory"
+			if virtual {
+				name = "externref"
+			}
+			b.Run(fmt.Sprintf("v%d/%s", bits, name), func(b *testing.B) {
+				rt := wago.NewRuntime()
+				if err := rt.Use(New()); err != nil {
+					b.Fatal(err)
+				}
+				mod, err := rt.Compile(unaryChainModule(bits, 77, depth, virtual))
+				if err != nil {
+					b.Fatal(err)
+				}
+				in, err := rt.Instantiate(context.Background(), mod)
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer in.Close()
+				b.ReportAllocs()
+				b.ResetTimer()
+				start := time.Now()
+				for i := 0; i < b.N; i++ {
+					if _, err := in.Invoke("run"); err != nil {
+						b.Fatal(err)
+					}
+				}
+				elapsed := time.Since(start)
+				b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N)/depth, "ns/wide-op")
+			})
+		}
 	}
 }
 
@@ -380,7 +515,7 @@ func kernelImportModule(bits uint16, sub uint32, arity int) []byte {
 	if !ok {
 		panic(fmt.Sprintf("unknown SIMD subopcode %d", sub))
 	}
-	imp := append(name(InstructionModule), name(instruction)...)
+	imp := append(name(InstructionModule), name(instruction+".memory")...)
 	imp = append(imp, 0, 0)
 	body := []byte{0}
 	for i := 0; i < arity; i++ {
@@ -394,6 +529,123 @@ func kernelImportModule(bits uint16, sub uint32, arity int) []byte {
 	out = append(out, section(3, vec([]byte{0}))...)
 	out = append(out, section(5, vec([]byte{0, 1}))...)
 	out = append(out, section(7, vec(append(name("run"), 0, 1), append(name("memory"), 2, 0)))...)
+	out = append(out, section(10, vec(code))...)
+	return out
+}
+
+func virtualKernelModule(bits uint16, sub uint32, arity int) []byte {
+	vec := func(items ...[]byte) []byte {
+		out := uleb(uint32(len(items)))
+		for _, item := range items {
+			out = append(out, item...)
+		}
+		return out
+	}
+	section := func(id byte, body []byte) []byte {
+		return append(append([]byte{id}, uleb(uint32(len(body)))...), body...)
+	}
+	name := func(s string) []byte { return append(uleb(uint32(len(s))), s...) }
+	instruction, ok := instructionName(bits, sub)
+	if !ok {
+		panic(fmt.Sprintf("unknown SIMD subopcode %d", sub))
+	}
+	loadType := []byte{0x60, 1, 0x7f, 1, 0x6f}
+	opType := []byte{0x60, byte(arity)}
+	for i := 0; i < arity; i++ {
+		opType = append(opType, 0x6f)
+	}
+	opType = append(opType, 1, 0x6f)
+	storeType := []byte{0x60, 2, 0x6f, 0x7f, 0}
+	runType := []byte{0x60, byte(arity + 1)}
+	for i := 0; i <= arity; i++ {
+		runType = append(runType, 0x7f)
+	}
+	runType = append(runType, 0)
+	importFunc := func(importName string, typeIndex byte) []byte {
+		imp := append(name(InstructionModule), name(importName)...)
+		return append(imp, 0, typeIndex)
+	}
+	body := []byte{0}
+	for i := 0; i < arity; i++ {
+		body = append(body, 0x20, byte(i+1), 0x10, 0)
+	}
+	body = append(body, 0x10, 1, 0x20, 0, 0x10, 2, 0x0b)
+	code := append(uleb(uint32(len(body))), body...)
+	out := []byte{0, 'a', 's', 'm', 1, 0, 0, 0}
+	out = append(out, section(1, vec(loadType, opType, storeType, runType))...)
+	out = append(out, section(2, vec(
+		importFunc("v"+itoa(int(bits))+".load", 0),
+		importFunc(instruction, 1),
+		importFunc("v"+itoa(int(bits))+".store", 2),
+	))...)
+	out = append(out, section(3, vec([]byte{3}))...)
+	out = append(out, section(5, vec([]byte{0, 1}))...)
+	out = append(out, section(7, vec(append(name("run"), 0, 3), append(name("memory"), 2, 0)))...)
+	out = append(out, section(10, vec(code))...)
+	return out
+}
+
+func unaryChainModule(bits uint16, sub uint32, depth int, virtual bool) []byte {
+	vec := func(items ...[]byte) []byte {
+		out := uleb(uint32(len(items)))
+		for _, item := range items {
+			out = append(out, item...)
+		}
+		return out
+	}
+	section := func(id byte, body []byte) []byte {
+		return append(append([]byte{id}, uleb(uint32(len(body)))...), body...)
+	}
+	name := func(s string) []byte { return append(uleb(uint32(len(s))), s...) }
+	instruction, ok := instructionName(bits, sub)
+	if !ok {
+		panic(fmt.Sprintf("unknown SIMD subopcode %d", sub))
+	}
+	importFunc := func(importName string, typeIndex byte) []byte {
+		imp := append(name(InstructionModule), name(importName)...)
+		return append(imp, 0, typeIndex)
+	}
+	var types, imports, body []byte
+	if virtual {
+		loadType := []byte{0x60, 1, 0x7f, 1, 0x6f}
+		opType := []byte{0x60, 1, 0x6f, 1, 0x6f}
+		storeType := []byte{0x60, 2, 0x6f, 0x7f, 0}
+		runType := []byte{0x60, 0, 0}
+		types = vec(loadType, opType, storeType, runType)
+		imports = vec(
+			importFunc("v"+itoa(int(bits))+".load", 0),
+			importFunc(instruction, 1),
+			importFunc("v"+itoa(int(bits))+".store", 2),
+		)
+		body = []byte{0, 0x41, 0xc0, 0x00, 0x10, 0}
+		for i := 0; i < depth; i++ {
+			body = append(body, 0x10, 1)
+		}
+		body = append(body, 0x41, 0, 0x10, 2, 0x0b)
+	} else {
+		opType := []byte{0x60, 2, 0x7f, 0x7f, 0}
+		runType := []byte{0x60, 0, 0}
+		types = vec(opType, runType)
+		imports = vec(importFunc(instruction+".memory", 0))
+		body = []byte{0}
+		for i := 0; i < depth; i++ {
+			body = append(body, 0x41, 0, 0x41, 0, 0x10, 0)
+		}
+		body = append(body, 0x0b)
+	}
+	code := append(uleb(uint32(len(body))), body...)
+	out := []byte{0, 'a', 's', 'm', 1, 0, 0, 0}
+	out = append(out, section(1, types)...)
+	out = append(out, section(2, imports)...)
+	runTypeIndex := byte(1)
+	runFunctionIndex := byte(1)
+	if virtual {
+		runTypeIndex = 3
+		runFunctionIndex = 3
+	}
+	out = append(out, section(3, vec([]byte{runTypeIndex}))...)
+	out = append(out, section(5, vec([]byte{0, 1}))...)
+	out = append(out, section(7, vec(append(name("run"), 0, runFunctionIndex), append(name("memory"), 2, 0)))...)
 	out = append(out, section(10, vec(code))...)
 	return out
 }
@@ -416,7 +668,7 @@ func kernelLoopModule(bits uint16, sub uint32, right int32) []byte {
 	}
 	importType := []byte{0x60, 3, 0x7f, 0x7f, 0x7f, 0}
 	runType := []byte{0x60, 1, 0x7f, 0}
-	imp := append(name(InstructionModule), name(instruction)...)
+	imp := append(name(InstructionModule), name(instruction+".memory")...)
 	imp = append(imp, 0, 0)
 	body := []byte{
 		0,          // local declarations

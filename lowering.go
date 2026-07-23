@@ -11,8 +11,168 @@ import (
 // targetLowerings is the only seam between Wide's semantic catalog and Wago.
 // Every architecture decision stays in this package; Wago only supplies raw
 // registers, checked addresses, and encoders.
-func targetLowerings(bits uint16, opcode uint32, arity int) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
+func memoryTargetLowerings(bits uint16, opcode uint32, arity int) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
 	return amd64Lowering(bits, opcode, arity), arm64Lowering(bits, opcode, arity)
+}
+
+func virtualTargetLowerings(bits uint16, opcode uint32, arity int) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
+	return virtualAMD64Lowering(bits, opcode, arity), virtualARM64Lowering(bits, opcode, arity)
+}
+
+func virtualAMD64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64InstructionLowering {
+	return &wago.AMD64InstructionLowering{
+		Compatibility: wago.AMD64CompatibilityFullAccess,
+		Features:      wago.AMD64FeatureAVX2,
+		Emit: func(ctx wago.AMD64LoweringContext) error {
+			inputs := make([][]x86.Reg, arity)
+			for i := range inputs {
+				regs, err := ctx.InputVirtual(i)
+				if err != nil {
+					return err
+				}
+				inputs[i] = regs
+			}
+			chunks := int(bits / 256)
+			outputs := make([]x86.Reg, chunks)
+			for chunk := 0; chunk < chunks; chunk++ {
+				raw := make([]uint8, arity)
+				for input := range inputs {
+					raw[input] = uint8(inputs[input][chunk])
+				}
+				out, err := emitAMD64YMM(ctx, opcode, raw)
+				if err != nil {
+					return err
+				}
+				outputs[chunk] = out
+			}
+			if err := ctx.OutputVirtual(outputs...); err != nil {
+				return fmt.Errorf("%w (inputs %v)", err, inputs)
+			}
+			return nil
+		},
+	}
+}
+
+func virtualARM64Lowering(bits uint16, opcode uint32, arity int) *wago.ARM64InstructionLowering {
+	return &wago.ARM64InstructionLowering{
+		Compatibility: wago.ARM64CompatibilityFullAccess,
+		Emit: func(ctx wago.ARM64LoweringContext) error {
+			inputs := make([][]a64.Reg, arity)
+			seen := map[a64.Reg]bool{}
+			for i := range inputs {
+				regs, err := ctx.InputVirtual(i)
+				if err != nil {
+					return err
+				}
+				for _, reg := range regs {
+					if seen[reg] {
+						return fmt.Errorf("wide: arm64 virtual input bundles alias at register %d: %v", reg, inputs)
+					}
+					seen[reg] = true
+				}
+				inputs[i] = regs
+			}
+			chunks := int(bits / 128)
+			outputs := make([]a64.Reg, chunks)
+			for chunk := 0; chunk < chunks; chunk++ {
+				raw := make([]uint8, arity)
+				for input := range inputs {
+					raw[input] = uint8(inputs[input][chunk])
+				}
+				out, err := emitARM64NEON(ctx, opcode, raw)
+				if err != nil {
+					return err
+				}
+				outputs[chunk] = out
+			}
+			if err := ctx.OutputVirtual(outputs...); err != nil {
+				return fmt.Errorf("%w (inputs %v)", err, inputs)
+			}
+			return nil
+		},
+	}
+}
+
+func virtualLoadLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
+	amd64 := &wago.AMD64InstructionLowering{
+		Compatibility: wago.AMD64CompatibilityFullAccess,
+		Features:      wago.AMD64FeatureAVX2,
+		Emit: func(ctx wago.AMD64LoweringContext) error {
+			base, index, disp, err := ctx.CheckedMemory(0, 0, int(bits/8))
+			if err != nil {
+				return err
+			}
+			outputs := make([]x86.Reg, bits/256)
+			for i := range outputs {
+				reg := ctx.AllocYMM()
+				ctx.Encoder().YMovdquLoadIdx(reg, base, index, disp+int32(i*32))
+				outputs[i] = reg
+			}
+			ctx.ReleaseGP(index)
+			return ctx.OutputVirtual(outputs...)
+		},
+	}
+	arm64 := &wago.ARM64InstructionLowering{
+		Compatibility: wago.ARM64CompatibilityFullAccess,
+		Emit: func(ctx wago.ARM64LoweringContext) error {
+			base, index, disp, err := ctx.CheckedMemory(0, 0, int(bits/8))
+			if err != nil {
+				return err
+			}
+			outputs := make([]a64.Reg, bits/128)
+			for i := range outputs {
+				reg := ctx.AllocVector()
+				ctx.Encoder().LdrQIdx(reg, base, index, disp+int32(i*16))
+				outputs[i] = reg
+			}
+			ctx.ReleaseGP(index)
+			return ctx.OutputVirtual(outputs...)
+		},
+	}
+	return amd64, arm64
+}
+
+func virtualStoreLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
+	amd64 := &wago.AMD64InstructionLowering{
+		Compatibility: wago.AMD64CompatibilityFullAccess,
+		Features:      wago.AMD64FeatureAVX2,
+		Emit: func(ctx wago.AMD64LoweringContext) error {
+			values, err := ctx.InputVirtual(0)
+			if err != nil {
+				return err
+			}
+			base, index, disp, err := ctx.CheckedMemory(1, 0, int(bits/8))
+			if err != nil {
+				return err
+			}
+			for i, value := range values {
+				ctx.Encoder().YMovdquStoreIdx(base, index, value, disp+int32(i*32))
+				ctx.ReleaseVector(value)
+			}
+			ctx.ReleaseGP(index)
+			return nil
+		},
+	}
+	arm64 := &wago.ARM64InstructionLowering{
+		Compatibility: wago.ARM64CompatibilityFullAccess,
+		Emit: func(ctx wago.ARM64LoweringContext) error {
+			values, err := ctx.InputVirtual(0)
+			if err != nil {
+				return err
+			}
+			base, index, disp, err := ctx.CheckedMemory(1, 0, int(bits/8))
+			if err != nil {
+				return err
+			}
+			for i, value := range values {
+				ctx.Encoder().StrQIdx(base, index, value, disp+int32(i*16))
+				ctx.ReleaseVector(value)
+			}
+			ctx.ReleaseGP(index)
+			return nil
+		},
+	}
+	return amd64, arm64
 }
 
 func amd64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64InstructionLowering {
@@ -73,7 +233,7 @@ func amd64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64Instruction
 				} else {
 					ctx.Encoder().VMovdquStoreIdx(dst.base, dst.index, out, dst.disp+int32(offset))
 				}
-				ctx.Release(out)
+				ctx.ReleaseVector(out)
 			}
 			return nil
 		},
@@ -110,7 +270,7 @@ func arm64Lowering(bits uint16, opcode uint32, arity int) *wago.ARM64Instruction
 				}
 				dst := addresses[0]
 				ctx.Encoder().StrQIdx(dst.base, dst.index, out, dst.disp+int32(offset))
-				ctx.Release(out)
+				ctx.ReleaseVector(out)
 			}
 			return nil
 		},
