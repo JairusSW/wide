@@ -20,7 +20,7 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	imports := rt.ProvidedImports()
-	want := len(canonicalNames)*4 + 4
+	want := len(canonicalNames)*4 + 9
 	// Three wago:abi lifecycle imports accompany every custom-instruction plugin.
 	if got := len(imports) - 3; got != want {
 		t.Fatalf("registered instructions=%d, want %d", got, want)
@@ -35,7 +35,27 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 		if strings.Contains(spec.Name, ".fd.") {
 			t.Fatalf("%s exposes an engine opcode instead of a SIMD semantic name", spec.Name)
 		}
-		if strings.HasSuffix(spec.Name, ".memory") {
+		if strings.HasPrefix(spec.Name, "json.escape_copy_utf16_") {
+			wantParams := 2
+			if spec.Name == "json.escape_copy_utf16_bulk.v512" {
+				wantParams = 4
+			}
+			if len(spec.Params) != wantParams ||
+				len(spec.Results) != 1 ||
+				spec.Results[0] != wago.ValI32 {
+				t.Fatalf("%s has physical signature %v -> %v, want %d i32 params -> [i32]", spec.Name, spec.Params, spec.Results, wantParams)
+			}
+			for _, typ := range spec.Params {
+				if typ != wago.ValI32 {
+					t.Fatalf("%s has non-i32 JSON parameter %v", spec.Name, typ)
+				}
+			}
+		} else if spec.Name == "json.find_quote_backslash_utf16_64.v512" {
+			if len(spec.Params) != 1 || spec.Params[0] != wago.ValI32 ||
+				len(spec.Results) != 1 || spec.Results[0] != wago.ValI32 {
+				t.Fatalf("%s has physical signature %v -> %v, want [i32] -> [i32]", spec.Name, spec.Params, spec.Results)
+			}
+		} else if strings.HasSuffix(spec.Name, ".memory") {
 			if len(spec.Results) != 0 {
 				t.Fatalf("%s returns values", spec.Name)
 			}
@@ -89,6 +109,9 @@ func TestCarrierOptionControlsEveryCustomImport(t *testing.T) {
 			seen := 0
 			for _, spec := range rt.ProvidedImports() {
 				if spec.Module != InstructionModule || strings.HasSuffix(spec.Name, ".memory") {
+					continue
+				}
+				if strings.HasPrefix(spec.Name, "json.") {
 					continue
 				}
 				for i, param := range spec.Params {

@@ -32,6 +32,118 @@ func nativeOnlyHandler(name string) wago.InstructionHandler {
 	}
 }
 
+func jsonEscapeCopyHandler(ctx wago.InstructionContext, args []wago.Bits) ([]wago.Bits, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("JSON escape-copy requires source and destination pointers")
+	}
+	src, dst := uint64(args[0].Uint32()), uint64(args[1].Uint32())
+	memory := ctx.Memory()
+	if src+64 > uint64(len(memory)) || dst+64 > uint64(len(memory)) {
+		return nil, fmt.Errorf("JSON escape-copy memory access is out of bounds")
+	}
+	copy(memory[dst:dst+64], memory[src:src+64])
+	var mask uint32
+	for lane := uint32(0); lane < 32; lane++ {
+		offset := src + uint64(lane*2)
+		code := uint16(memory[offset]) | uint16(memory[offset+1])<<8
+		if code == 0x22 || code == 0x5c || code < 0x20 || code >= 0xd800 && code <= 0xdfff {
+			mask |= 1 << lane
+		}
+	}
+	result, err := wago.NewBits(32, []byte{
+		byte(mask),
+		byte(mask >> 8),
+		byte(mask >> 16),
+		byte(mask >> 24),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return []wago.Bits{result}, nil
+}
+
+func jsonEscapeCopy256Handler(ctx wago.InstructionContext, args []wago.Bits) ([]wago.Bits, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("256-byte JSON escape-copy requires source and destination pointers")
+	}
+	src, dst := uint64(args[0].Uint32()), uint64(args[1].Uint32())
+	memory := ctx.Memory()
+	if src+256 > uint64(len(memory)) || dst+256 > uint64(len(memory)) {
+		return nil, fmt.Errorf("256-byte JSON escape-copy memory access is out of bounds")
+	}
+	copy(memory[dst:dst+256], memory[src:src+256])
+	var found uint32
+	for offset := uint64(0); offset < 256; offset += 2 {
+		code := uint16(memory[src+offset]) | uint16(memory[src+offset+1])<<8
+		if code == 0x22 || code == 0x5c || code < 0x20 || code >= 0xd800 && code <= 0xdfff {
+			found = 1
+			break
+		}
+	}
+	result, err := wago.NewBits(32, []byte{byte(found), 0, 0, 0})
+	if err != nil {
+		return nil, err
+	}
+	return []wago.Bits{result}, nil
+}
+
+func jsonEscapeCopyBulkHandler(ctx wago.InstructionContext, args []wago.Bits) ([]wago.Bits, error) {
+	if len(args) != 4 {
+		return nil, fmt.Errorf("bulk JSON escape-copy requires source, destination, and inclusive end pointers")
+	}
+	src, dst := uint64(args[0].Uint32()), uint64(args[1].Uint32())
+	lastSrc, lastDst := uint64(args[2].Uint32()), uint64(args[3].Uint32())
+	memory := ctx.Memory()
+	if lastSrc < src || lastDst < dst || lastSrc-src != lastDst-dst ||
+		(lastSrc-src)%64 != 0 || lastSrc+64 > uint64(len(memory)) ||
+		lastDst+64 > uint64(len(memory)) {
+		return nil, fmt.Errorf("bulk JSON escape-copy memory range is invalid")
+	}
+	var found uint32
+	for src <= lastSrc {
+		copy(memory[dst:dst+64], memory[src:src+64])
+		for offset := uint64(0); offset < 64; offset += 2 {
+			code := uint16(memory[src+offset]) | uint16(memory[src+offset+1])<<8
+			if code == 0x22 || code == 0x5c || code < 0x20 || code >= 0xd800 && code <= 0xdfff {
+				found = 1
+			}
+		}
+		src += 64
+		dst += 64
+	}
+	result, err := wago.NewBits(32, []byte{byte(found), 0, 0, 0})
+	if err != nil {
+		return nil, err
+	}
+	return []wago.Bits{result}, nil
+}
+
+func jsonFindQuoteBackslashHandler(ctx wago.InstructionContext, args []wago.Bits) ([]wago.Bits, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("JSON quote/backslash scan requires one source pointer")
+	}
+	src := uint64(args[0].Uint32())
+	memory := ctx.Memory()
+	if src+64 > uint64(len(memory)) {
+		return nil, fmt.Errorf("JSON quote/backslash scan is out of bounds")
+	}
+	var mask uint32
+	for lane := uint32(0); lane < 32; lane++ {
+		offset := src + uint64(lane*2)
+		code := uint16(memory[offset]) | uint16(memory[offset+1])<<8
+		if code == 0x22 || code == 0x5c {
+			mask |= 1 << lane
+		}
+	}
+	result, err := wago.NewBits(32, []byte{
+		byte(mask), byte(mask >> 8), byte(mask >> 16), byte(mask >> 24),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return []wago.Bits{result}, nil
+}
+
 func New(options ...Option) wago.Extension {
 	ext := extension{carrier: wago.WasmExternRef}
 	for _, option := range options {
@@ -44,7 +156,7 @@ func New(options ...Option) wago.Extension {
 
 func (extension) Info() wago.ExtensionInfo {
 	return wago.ExtensionInfo{
-		ID: PluginID, Name: "Wide", Version: "0.2.0",
+		ID: PluginID, Name: "Wide", Version: "0.2.1",
 		Description: "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering",
 		Stability:   wago.Experimental, License: "MIT",
 		Homepage: "https://github.com/JairusSW/wide", Repository: "https://github.com/JairusSW/wide",
@@ -133,6 +245,56 @@ func (e extension) Register(reg *wago.Registry) error {
 		}); err != nil {
 			return err
 		}
+	}
+	if err := compiler.Instruction(wago.InstructionSpec{
+		Module:  InstructionModule,
+		Name:    "json.escape_copy_utf16_64",
+		Input:   []int32{32, 32},
+		Output:  []int32{32},
+		Handler: jsonEscapeCopyHandler,
+		AMD64:   jsonEscapeCopyAMD64Lowering(),
+	}); err != nil {
+		return err
+	}
+	if err := compiler.Instruction(wago.InstructionSpec{
+		Module:  InstructionModule,
+		Name:    "json.escape_copy_utf16_64.v512",
+		Input:   []int32{32, 32},
+		Output:  []int32{32},
+		Handler: jsonEscapeCopyHandler,
+		AMD64:   jsonEscapeCopyAVX512Lowering(),
+	}); err != nil {
+		return err
+	}
+	if err := compiler.Instruction(wago.InstructionSpec{
+		Module:  InstructionModule,
+		Name:    "json.escape_copy_utf16_256.v512",
+		Input:   []int32{32, 32},
+		Output:  []int32{32},
+		Handler: jsonEscapeCopy256Handler,
+		AMD64:   jsonEscapeCopy256AVX512Lowering(),
+	}); err != nil {
+		return err
+	}
+	if err := compiler.Instruction(wago.InstructionSpec{
+		Module:  InstructionModule,
+		Name:    "json.escape_copy_utf16_bulk.v512",
+		Input:   []int32{32, 32, 32, 32},
+		Output:  []int32{32},
+		Handler: jsonEscapeCopyBulkHandler,
+		AMD64:   jsonEscapeCopyBulkAVX512Lowering(),
+	}); err != nil {
+		return err
+	}
+	if err := compiler.Instruction(wago.InstructionSpec{
+		Module:  InstructionModule,
+		Name:    "json.find_quote_backslash_utf16_64.v512",
+		Input:   []int32{32},
+		Output:  []int32{32},
+		Handler: jsonFindQuoteBackslashHandler,
+		AMD64:   jsonFindQuoteBackslashAVX512Lowering(),
+	}); err != nil {
+		return err
 	}
 	return nil
 }
