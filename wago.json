@@ -1,8 +1,8 @@
 {
-  "schema": "wago-plugin/v1",
+  "$schema": "https://wago.sh/v0/schema.json",
   "module": "github.com/JairusSW/wide",
   "name": "Wide",
-  "version": "0.2.1",
+  "version": "0.0.0",
   "description": "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering.",
   "stability": "experimental",
   "license": "MIT",

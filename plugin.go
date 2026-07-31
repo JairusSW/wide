@@ -156,7 +156,7 @@ func New(options ...Option) wago.Extension {
 
 func (extension) Info() wago.ExtensionInfo {
 	return wago.ExtensionInfo{
-		ID: PluginID, Name: "Wide", Version: "0.2.1",
+		ID: PluginID, Name: "Wide", Version: "0.0.0",
 		Description: "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering",
 		Stability:   wago.Experimental, License: "MIT",
 		Homepage: "https://github.com/JairusSW/wide", Repository: "https://github.com/JairusSW/wide",
