@@ -56,7 +56,7 @@ What you get out of the box:
   can call Wide with ordinary function imports. No custom section or custom
   Wasm type is required.
 
-> **Stability:** experimental (`v0.2.0`). The plugin ABI and backend selection
+> **Stability:** experimental (`v0.0.0`). The plugin ABI and backend selection
 > policy may change before `v1.0.0`.
 
 ## Installation
@@ -73,24 +73,21 @@ or use [`go get`](https://pkg.go.dev/cmd/go#hdr-Get_packages_and_dependencies):
 go get github.com/JairusSW/wide
 ```
 
-Wide requires the privileged `compiler.codegen` capability. `wago pkg add`
-scaffolds the dependency with no authority; after reviewing the plugin, grant
-the capability in your project's `wago.json`:
+`wago pkg add` records the version-constrained dependency in your project's
+`wago.json`:
 
 ```json
 {
-  "dependencies": ["github.com/JairusSW/wide"],
-  "plugins": [
-    {
-      "name": "github.com/JairusSW/wide",
-      "capabilities": ["compiler.codegen"]
-    }
-  ]
+  "$schema": "https://wago.sh/v0/schema.json",
+  "plugins": {
+    "JairusSW/wide": "^0.0.0"
+  }
 }
 ```
 
-Programmatic `Runtime.Use` is the trusted embedder path and does not require a
-manifest grant.
+The exact version is resolved into `wago-lock.json`. Wide provides the guest
+`compiler.codegen` permission; guest policy, rather than plugin authority,
+controls whether a module may use it.
 
 ## Usage
 
