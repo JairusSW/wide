@@ -4,7 +4,6 @@ import (
 	"os"
 	"strings"
 
-	wago "github.com/wago-org/wago"
 	x86 "github.com/wago-org/wago/codegen/amd64"
 )
 
@@ -164,7 +163,7 @@ func zmmEncodingFor(opcode uint32) (zmmEncoding, bool) {
 	return e, true
 }
 
-func emitAMD64ZMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x86.Reg, error) {
+func emitAMD64ZMM(ctx x86.Context, opcode uint32, raw []uint8) (x86.Reg, error) {
 	inputs := make([]x86.Reg, len(raw))
 	for i := range raw {
 		inputs[i] = x86.Reg(raw[i])

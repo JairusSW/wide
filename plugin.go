@@ -4,7 +4,10 @@
 package wide
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 
 	wago "github.com/wago-org/wago"
@@ -15,15 +18,108 @@ const (
 	InstructionModule = "as-simd"
 )
 
-type extension struct{ carrier wago.WasmType }
+type plugin struct{ carrier wago.WasmType }
 
-type Option func(*extension)
+// Config selects the standard Wasm carrier used to validate Wide's
+// compiler-erased vector values. Guest modules and the plugin must use the same
+// carrier. The empty value defaults to externref.
+type Config struct {
+	Carrier string `json:"carrier,omitempty"`
+}
 
-// WithCarrier selects the standard Wasm type used to validate Wide's
-// compiler-erased vector values. Both the guest module and plugin must select
-// the same carrier.
-func WithCarrier(carrier wago.WasmType) Option {
-	return func(ext *extension) { ext.carrier = carrier }
+var configSchema = json.RawMessage(`{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "carrier": {
+      "type": "string",
+      "enum": ["i32", "i64", "f32", "f64", "v128", "funcref", "externref"]
+    }
+  }
+}`)
+
+func decodeConfig(raw json.RawMessage) (Config, wago.WasmType, error) {
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+	if err := validateConfigObject(raw); err != nil {
+		return Config{}, 0, fmt.Errorf("wide: config: %w", err)
+	}
+	var cfg Config
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return Config{}, 0, fmt.Errorf("wide: config: %w", err)
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return Config{}, 0, fmt.Errorf("wide: config has a trailing JSON value")
+	}
+	carrier, err := carrierForConfig(cfg)
+	return cfg, carrier, err
+}
+
+func validateConfigObject(raw json.RawMessage) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	token, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim('{') {
+		return fmt.Errorf("must be a JSON object")
+	}
+	seen := map[string]struct{}{}
+	for dec.More() {
+		keyToken, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return fmt.Errorf("object key is not a string")
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate field %q", key)
+		}
+		seen[key] = struct{}{}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return err
+		}
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("field %q must not be null", key)
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("has a trailing JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func carrierForConfig(cfg Config) (wago.WasmType, error) {
+	switch cfg.Carrier {
+	case "", "externref":
+		return wago.WasmExternRef, nil
+	case "i32":
+		return wago.WasmI32, nil
+	case "i64":
+		return wago.WasmI64, nil
+	case "f32":
+		return wago.WasmF32, nil
+	case "f64":
+		return wago.WasmF64, nil
+	case "v128":
+		return wago.WasmV128, nil
+	case "funcref":
+		return wago.WasmFuncRef, nil
+	default:
+		return 0, fmt.Errorf("wide: unsupported carrier %q", cfg.Carrier)
+	}
 }
 
 func nativeOnlyHandler(name string) wago.InstructionHandler {
@@ -144,37 +240,85 @@ func jsonFindQuoteBackslashHandler(ctx wago.InstructionContext, args []wago.Bits
 	return []wago.Bits{result}, nil
 }
 
-func New(options ...Option) wago.Extension {
-	ext := extension{carrier: wago.WasmExternRef}
-	for _, option := range options {
-		if option != nil {
-			option(&ext)
-		}
+// Definition returns fresh immutable catalog metadata for the Wide provider.
+func Definition() wago.PluginDefinition {
+	return wago.PluginDefinition{
+		ID:          PluginID,
+		Name:        "Wide",
+		Version:     "0.2.0",
+		Description: "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering.",
+		Stability:   wago.Experimental,
+		Compatibility: wago.Compatibility{
+			Engines: map[string]string{
+				"wago": ">=0.1.0", "go": ">=1.22", "tinygo": ">=0.41.1",
+			},
+			Platforms: []string{
+				"darwin/amd64", "darwin/arm64",
+				"linux/amd64", "linux/arm64",
+				"windows/amd64", "windows/arm64",
+			},
+		},
+		Provenance: wago.PluginProvenance{
+			Homepage:   "https://github.com/JairusSW/wide",
+			Repository: "https://github.com/JairusSW/wide",
+			License:    "MIT",
+			Authors:    []string{"Jairus Tanaka"},
+		},
+		Authorities: []wago.AuthorityRequest{
+			{
+				Name:   wago.AuthorityCompilerTypeDefine,
+				Mode:   wago.AuthorityRequired,
+				Reason: "define Wide's compiler-erased vector value types",
+				Scope:  wago.AuthorityScope{Modules: []string{"wide"}},
+			},
+			{
+				Name:   wago.AuthorityCompilerInstructionDefine,
+				Mode:   wago.AuthorityRequired,
+				Reason: "define and lower the as-simd guest instruction ABI",
+				Scope:  wago.AuthorityScope{Modules: []string{InstructionModule}},
+			},
+		},
+		ConfigSchema: append(json.RawMessage(nil), configSchema...),
 	}
-	return ext
 }
 
-func (extension) Info() wago.ExtensionInfo {
-	return wago.ExtensionInfo{
-		ID: PluginID, Name: "Wide", Version: "0.0.0",
-		Description: "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering",
-		Stability:   wago.Experimental, License: "MIT",
-		Homepage: "https://github.com/JairusSW/wide", Repository: "https://github.com/JairusSW/wide",
-		Tags: []string{"simd", "avx512", "avx2", "neon", "assemblyscript", "compiler"},
-		Compat: wago.Compatibility{
-			Engines:   map[string]string{"wago": ">=0.1.0", "go": ">=1.22", "tinygo": ">=0.41.1"},
-			Platforms: []string{"linux/amd64", "linux/arm64"},
+// Provider is Wide's explicit, side-effect-free catalog entry.
+func Provider() wago.PluginProvider {
+	return wago.PluginProvider{
+		Definition: Definition(),
+		New:        func() wago.Plugin { return new(plugin) },
+		ValidateConfig: func(raw json.RawMessage) error {
+			_, _, err := decodeConfig(raw)
+			return err
 		},
 	}
 }
 
-func (e extension) Register(reg *wago.Registry) error {
-	reg.Capability(wago.CapCompilerCodegen, wago.CapabilityDocs("Declares checked architecture-neutral as-simd pointer operations for native SIMD lowering."))
-	compiler := reg.Compiler()
+func (e *plugin) Register(reg *wago.Registrar) error {
+	var raw Config
+	if err := reg.Config(&raw); err != nil {
+		return err
+	}
+	carrier, err := carrierForConfig(raw)
+	if err != nil {
+		return err
+	}
+	e.carrier = carrier
+	if err := reg.GuestCapability(wago.CapCompilerCodegen, wago.CapabilityDocs("Declares checked architecture-neutral as-simd pointer operations for native SIMD lowering.")); err != nil {
+		return err
+	}
+	types, err := reg.CompilerTypes()
+	if err != nil {
+		return err
+	}
+	instructions, err := reg.CompilerInstructions()
+	if err != nil {
+		return err
+	}
 	customTypes := make(map[uint16]wago.CustomType, 2)
 	for _, bits := range []uint16{256, 512} {
-		typ, err := compiler.Type(wago.CustomTypeSpec{
-			Name: "wide.v" + itoa(int(bits)), Size: int32(bits / 8), Carrier: e.carrier,
+		typ, err := types.Define(wago.CustomTypeSpec{
+			Name: "wide/v" + itoa(int(bits)), Size: int32(bits / 8), Carrier: e.carrier,
 		})
 		if err != nil {
 			return err
@@ -201,12 +345,11 @@ func (e extension) Register(reg *wago.Registry) error {
 			}
 			width, opcode := bits, sub
 			name, _ := instructionName(width, opcode)
-			amd64, arm64 := customTargetLowerings(width, opcode, arity)
-			err := compiler.Instruction(wago.InstructionSpec{
+			lowering := customTargetLowering(width, opcode, arity)
+			err := instructions.Define(wago.InstructionSpec{
 				Module: InstructionModule, Name: name,
-				Custom: &wago.CustomSignature{Inputs: customInputs, Output: &customType},
-				AMD64:  amd64,
-				ARM64:  arm64,
+				Custom:  &wago.CustomSignature{Inputs: customInputs, Output: &customType},
+				Codegen: lowering,
 			})
 			if err != nil {
 				return err
@@ -215,10 +358,10 @@ func (e extension) Register(reg *wago.Registry) error {
 			for i := range memoryInputs {
 				memoryInputs[i] = 32
 			}
-			amd64, arm64 = memoryTargetLowerings(width, opcode, arity)
-			if err := compiler.Instruction(wago.InstructionSpec{
+			lowering = memoryTargetLowering(width, opcode, arity)
+			if err := instructions.Define(wago.InstructionSpec{
 				Module: InstructionModule, Name: name + ".memory", Input: memoryInputs,
-				Handler: nativeOnlyHandler(name + ".memory"), AMD64: amd64, ARM64: arm64,
+				Handler: nativeOnlyHandler(name + ".memory"), Codegen: lowering,
 			}); err != nil {
 				return err
 			}
@@ -227,72 +370,72 @@ func (e extension) Register(reg *wago.Registry) error {
 	for _, bits := range []uint16{256, 512} {
 		customType := customTypes[bits]
 		empty := []wago.CustomType{{}}
-		amd64, arm64 := customLoadLowerings(bits)
-		if err := compiler.Instruction(wago.InstructionSpec{
+		lowering := customLoadLowering(bits)
+		if err := instructions.Define(wago.InstructionSpec{
 			Module: InstructionModule, Name: "v" + itoa(int(bits)) + ".load",
-			Input:  []int32{32},
-			Custom: &wago.CustomSignature{Inputs: empty, Output: &customType},
-			AMD64:  amd64, ARM64: arm64,
+			Input:   []int32{32},
+			Custom:  &wago.CustomSignature{Inputs: empty, Output: &customType},
+			Codegen: lowering,
 		}); err != nil {
 			return err
 		}
-		amd64, arm64 = customStoreLowerings(bits)
-		if err := compiler.Instruction(wago.InstructionSpec{
+		lowering = customStoreLowering(bits)
+		if err := instructions.Define(wago.InstructionSpec{
 			Module: InstructionModule, Name: "v" + itoa(int(bits)) + ".store",
-			Input:  []int32{0, 32},
-			Custom: &wago.CustomSignature{Inputs: []wago.CustomType{customType, wago.CustomType{}}},
-			AMD64:  amd64, ARM64: arm64,
+			Input:   []int32{0, 32},
+			Custom:  &wago.CustomSignature{Inputs: []wago.CustomType{customType, wago.CustomType{}}},
+			Codegen: lowering,
 		}); err != nil {
 			return err
 		}
 	}
-	if err := compiler.Instruction(wago.InstructionSpec{
+	if err := instructions.Define(wago.InstructionSpec{
 		Module:  InstructionModule,
 		Name:    "json.escape_copy_utf16_64",
 		Input:   []int32{32, 32},
 		Output:  []int32{32},
 		Handler: jsonEscapeCopyHandler,
-		AMD64:   jsonEscapeCopyAMD64Lowering(),
+		Codegen: selectTargetLowering(jsonEscapeCopyAMD64Lowering(), nil),
 	}); err != nil {
 		return err
 	}
-	if err := compiler.Instruction(wago.InstructionSpec{
+	if err := instructions.Define(wago.InstructionSpec{
 		Module:  InstructionModule,
 		Name:    "json.escape_copy_utf16_64.v512",
 		Input:   []int32{32, 32},
 		Output:  []int32{32},
 		Handler: jsonEscapeCopyHandler,
-		AMD64:   jsonEscapeCopyAVX512Lowering(),
+		Codegen: selectTargetLowering(jsonEscapeCopyAVX512Lowering(), nil),
 	}); err != nil {
 		return err
 	}
-	if err := compiler.Instruction(wago.InstructionSpec{
+	if err := instructions.Define(wago.InstructionSpec{
 		Module:  InstructionModule,
 		Name:    "json.escape_copy_utf16_256.v512",
 		Input:   []int32{32, 32},
 		Output:  []int32{32},
 		Handler: jsonEscapeCopy256Handler,
-		AMD64:   jsonEscapeCopy256AVX512Lowering(),
+		Codegen: selectTargetLowering(jsonEscapeCopy256AVX512Lowering(), nil),
 	}); err != nil {
 		return err
 	}
-	if err := compiler.Instruction(wago.InstructionSpec{
+	if err := instructions.Define(wago.InstructionSpec{
 		Module:  InstructionModule,
 		Name:    "json.escape_copy_utf16_bulk.v512",
 		Input:   []int32{32, 32, 32, 32},
 		Output:  []int32{32},
 		Handler: jsonEscapeCopyBulkHandler,
-		AMD64:   jsonEscapeCopyBulkAVX512Lowering(),
+		Codegen: selectTargetLowering(jsonEscapeCopyBulkAVX512Lowering(), nil),
 	}); err != nil {
 		return err
 	}
-	if err := compiler.Instruction(wago.InstructionSpec{
+	if err := instructions.Define(wago.InstructionSpec{
 		Module:  InstructionModule,
 		Name:    "json.find_quote_backslash_utf16_64.v512",
 		Input:   []int32{32},
 		Output:  []int32{32},
 		Handler: jsonFindQuoteBackslashHandler,
-		AMD64:   jsonFindQuoteBackslashAVX512Lowering(),
+		Codegen: selectTargetLowering(jsonFindQuoteBackslashAVX512Lowering(), nil),
 	}); err != nil {
 		return err
 	}

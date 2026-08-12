@@ -56,7 +56,7 @@ What you get out of the box:
   can call Wide with ordinary function imports. No custom section or custom
   Wasm type is required.
 
-> **Stability:** experimental (`v0.0.0`). The plugin ABI and backend selection
+> **Stability:** experimental (`v0.2.0`). The plugin ABI and backend selection
 > policy may change before `v1.0.0`.
 
 ## Installation
@@ -64,7 +64,7 @@ What you get out of the box:
 If you have the [`wago`](https://github.com/wago-org/wago) CLI installed:
 
 ```sh
-wago pkg add github.com/JairusSW/wide
+wago add github.com/JairusSW/wide
 ```
 
 or use [`go get`](https://pkg.go.dev/cmd/go#hdr-Get_packages_and_dependencies):
@@ -73,21 +73,23 @@ or use [`go get`](https://pkg.go.dev/cmd/go#hdr-Get_packages_and_dependencies):
 go get github.com/JairusSW/wide
 ```
 
-`wago pkg add` records the version-constrained dependency in your project's
+`wago add` records the version-constrained dependency in your project's
 `wago.json`:
 
 ```json
 {
-  "$schema": "https://wago.sh/v0/schema.json",
+  "$schema": "https://wago.sh/v1/schema.json",
   "plugins": {
-    "JairusSW/wide": "^0.0.0"
+    "github.com/JairusSW/wide": "^0.2.0"
   }
 }
 ```
 
-The exact version is resolved into `wago-lock.json`. Wide provides the guest
-`compiler.codegen` permission; guest policy, rather than plugin authority,
-controls whether a module may use it.
+The exact version, definition digest, configuration, and reviewed Authorities
+are resolved into `wago-lock.json`. Wide requests only
+`compiler.type.define` for the `wide` namespace and
+`compiler.instruction.define` for the `as-simd` import module. It separately
+provides the guest `compiler.codegen` capability for guest policy.
 
 ## Usage
 
@@ -160,7 +162,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/JairusSW/wide"
+	"github.com/JairusSW/wide/register"
 	wago "github.com/wago-org/wago"
 )
 
@@ -171,7 +173,25 @@ func main() {
 	}
 
 	rt := wago.NewRuntime()
-	if err := rt.Use(wide.New()); err != nil {
+	providers := register.Providers()
+	definition := providers[0].Definition
+	digest, err := wago.DefinitionDigest(definition)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := rt.LoadPlugins(context.Background(), wago.PluginSet{
+		Providers: providers,
+		Selections: []wago.PluginSelection{{
+			ID:               definition.ID,
+			DefinitionDigest: digest,
+			Grants: []wago.AuthorityGrant{
+				{Name: wago.AuthorityCompilerTypeDefine,
+					Scope: wago.AuthorityScope{Modules: []string{"wide"}}},
+				{Name: wago.AuthorityCompilerInstructionDefine,
+					Scope: wago.AuthorityScope{Modules: []string{"as-simd"}}},
+			},
+		}},
+	}); err != nil {
 		log.Fatal(err)
 	}
 	defer rt.Close()
@@ -252,18 +272,18 @@ is `externref`:
 | Store | `(value: C, address: i32) -> ()` |
 
 An embedder may instead select `i32`, `i64`, `f32`, `f64`, `v128`, or
-`funcref`. The guest and plugin must use the same carrier:
+`funcref`. Set the plugin's strict `carrier` configuration to the matching
+string; the reviewed value is stored in `wago-lock.json`. The guest and plugin
+must use the same carrier.
 
-```go
-if err := rt.Use(wide.New(wide.WithCarrier(wago.WasmV128))); err != nil {
-	panic(err)
-}
+```sh
+wago plugin config github.com/JairusSW/wide '{"carrier":"v128"}'
 ```
 
 For AssemblyScript, pair that with `AS_SIMD_WIDE_CARRIER=v128` when invoking
 the `as-simd` transform. Selecting a carrier changes only the module's
-validation signature. Wago still assigns the registered `wide.v256` or
-`wide.v512` identity and rejects ordinary values of the same Wasm type at a
+validation signature. Wago still assigns the registered `wide/v256` or
+`wide/v512` identity and rejects ordinary values of the same Wasm type at a
 custom-instruction boundary.
 
 Import names scale standard SIMD lane shapes to the selected width:
@@ -400,6 +420,8 @@ cross-compile.
   benchmark coverage.
 - **`emitted_integration_test.go`** - optional end-to-end coverage for a real
   `as-simd` transform output.
+- **`register/catalog.go`** - side-effect-free provider catalog used by generated
+  Wago runtimes.
 - **`wago.json`** - package manifest for registry identity, engine
   compatibility, and supported platforms.
 
@@ -409,7 +431,7 @@ register allocation, and raw target encoders. This keeps machine-code access
 out of the guest ABI and makes the same Wasm module portable across supported
 hosts without placing Wide-specific semantics in Wago.
 
-At registration, Wide declares `wide.v256` and `wide.v512` through Wago's
+At registration, Wide declares `wide/v256` and `wide/v512` through Wago's
 custom-type registry. `WasmExternRef` is the default carrier; the registered
 identity and native register bundles are compiler-only. Wide and other plugins
 may instead select `WasmI32`, `WasmI64`, `WasmF32`, `WasmF64`, `WasmV128`, or

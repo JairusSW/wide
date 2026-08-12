@@ -1,14 +1,11 @@
 package wide
 
-import (
-	wago "github.com/wago-org/wago"
-	a64 "github.com/wago-org/wago/codegen/arm64"
-)
+import a64 "github.com/wago-org/wago/codegen/arm64"
 
 // emitARM64NEON implements one 128-bit slice of a wide semantic instruction.
 // Width decomposition is handled by arm64Lowering; this function deliberately
 // owns every semantic choice so Wago remains a raw custom-instruction backend.
-func emitARM64NEON(ctx wago.ARM64LoweringContext, opcode uint32, raw []uint8) (a64.Reg, error) {
+func emitARM64NEON(ctx a64.Context, opcode uint32, raw []uint8) (a64.Reg, error) {
 	inputs := make([]a64.Reg, len(raw))
 	for i := range raw {
 		inputs[i] = a64.Reg(raw[i])

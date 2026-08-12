@@ -3,7 +3,7 @@ package wide
 import (
 	"fmt"
 
-	wago "github.com/wago-org/wago"
+	"github.com/wago-org/wago/codegen"
 	x86 "github.com/wago-org/wago/codegen/amd64"
 	a64 "github.com/wago-org/wago/codegen/arm64"
 )
@@ -11,19 +11,19 @@ import (
 // targetLowerings is the only seam between Wide's semantic catalog and Wago.
 // Every architecture decision stays in this package; Wago only supplies raw
 // registers, checked addresses, and encoders.
-func memoryTargetLowerings(bits uint16, opcode uint32, arity int) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
-	return amd64Lowering(bits, opcode, arity), arm64Lowering(bits, opcode, arity)
+func memoryTargetLowering(bits uint16, opcode uint32, arity int) codegen.Lowering {
+	return selectTargetLowering(amd64Lowering(bits, opcode, arity), arm64Lowering(bits, opcode, arity))
 }
 
-func customTargetLowerings(bits uint16, opcode uint32, arity int) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
-	return customAMD64Lowering(bits, opcode, arity), customARM64Lowering(bits, opcode, arity)
+func customTargetLowering(bits uint16, opcode uint32, arity int) codegen.Lowering {
+	return selectTargetLowering(customAMD64Lowering(bits, opcode, arity), customARM64Lowering(bits, opcode, arity))
 }
 
-func customAMD64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64InstructionLowering {
-	return &wago.AMD64InstructionLowering{
-		Compatibility: wago.AMD64CompatibilityFullAccess,
-		Features:      wago.AMD64FeatureAVX2,
-		Emit: func(ctx wago.AMD64LoweringContext) error {
+func customAMD64Lowering(bits uint16, opcode uint32, arity int) *x86.Lowering {
+	return &x86.Lowering{
+		Compatibility: x86.CompatibilityFullAccess,
+		Features:      x86.FeatureAVX2,
+		Emit: func(ctx x86.Context) error {
 			inputs := make([][]x86.Reg, arity)
 			for i := range inputs {
 				regs, err := ctx.InputCustom(i)
@@ -53,10 +53,10 @@ func customAMD64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64Instr
 	}
 }
 
-func customARM64Lowering(bits uint16, opcode uint32, arity int) *wago.ARM64InstructionLowering {
-	return &wago.ARM64InstructionLowering{
-		Compatibility: wago.ARM64CompatibilityFullAccess,
-		Emit: func(ctx wago.ARM64LoweringContext) error {
+func customARM64Lowering(bits uint16, opcode uint32, arity int) *a64.Lowering {
+	return &a64.Lowering{
+		Compatibility: a64.CompatibilityFullAccess,
+		Emit: func(ctx a64.Context) error {
 			inputs := make([][]a64.Reg, arity)
 			seen := map[a64.Reg]bool{}
 			for i := range inputs {
@@ -93,11 +93,11 @@ func customARM64Lowering(bits uint16, opcode uint32, arity int) *wago.ARM64Instr
 	}
 }
 
-func customLoadLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
-	amd64 := &wago.AMD64InstructionLowering{
-		Compatibility: wago.AMD64CompatibilityFullAccess,
-		Features:      wago.AMD64FeatureAVX2,
-		Emit: func(ctx wago.AMD64LoweringContext) error {
+func customLoadLowering(bits uint16) codegen.Lowering {
+	amd64 := &x86.Lowering{
+		Compatibility: x86.CompatibilityFullAccess,
+		Features:      x86.FeatureAVX2,
+		Emit: func(ctx x86.Context) error {
 			base, index, disp, err := ctx.CheckedMemory(0, 0, int(bits/8))
 			if err != nil {
 				return err
@@ -112,9 +112,9 @@ func customLoadLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.ARM
 			return ctx.OutputCustom(outputs...)
 		},
 	}
-	arm64 := &wago.ARM64InstructionLowering{
-		Compatibility: wago.ARM64CompatibilityFullAccess,
-		Emit: func(ctx wago.ARM64LoweringContext) error {
+	arm64 := &a64.Lowering{
+		Compatibility: a64.CompatibilityFullAccess,
+		Emit: func(ctx a64.Context) error {
 			base, index, disp, err := ctx.CheckedMemory(0, 0, int(bits/8))
 			if err != nil {
 				return err
@@ -129,14 +129,14 @@ func customLoadLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.ARM
 			return ctx.OutputCustom(outputs...)
 		},
 	}
-	return amd64, arm64
+	return selectTargetLowering(amd64, arm64)
 }
 
-func customStoreLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.ARM64InstructionLowering) {
-	amd64 := &wago.AMD64InstructionLowering{
-		Compatibility: wago.AMD64CompatibilityFullAccess,
-		Features:      wago.AMD64FeatureAVX2,
-		Emit: func(ctx wago.AMD64LoweringContext) error {
+func customStoreLowering(bits uint16) codegen.Lowering {
+	amd64 := &x86.Lowering{
+		Compatibility: x86.CompatibilityFullAccess,
+		Features:      x86.FeatureAVX2,
+		Emit: func(ctx x86.Context) error {
 			values, err := ctx.InputCustom(0)
 			if err != nil {
 				return err
@@ -153,9 +153,9 @@ func customStoreLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.AR
 			return nil
 		},
 	}
-	arm64 := &wago.ARM64InstructionLowering{
-		Compatibility: wago.ARM64CompatibilityFullAccess,
-		Emit: func(ctx wago.ARM64LoweringContext) error {
+	arm64 := &a64.Lowering{
+		Compatibility: a64.CompatibilityFullAccess,
+		Emit: func(ctx a64.Context) error {
 			values, err := ctx.InputCustom(0)
 			if err != nil {
 				return err
@@ -172,14 +172,14 @@ func customStoreLowerings(bits uint16) (*wago.AMD64InstructionLowering, *wago.AR
 			return nil
 		},
 	}
-	return amd64, arm64
+	return selectTargetLowering(amd64, arm64)
 }
 
-func jsonEscapeCopyAMD64Lowering() *wago.AMD64InstructionLowering {
-	return &wago.AMD64InstructionLowering{
-		Compatibility: wago.AMD64CompatibilityFullAccess,
-		Features:      wago.AMD64FeatureAVX2,
-		Emit: func(ctx wago.AMD64LoweringContext) error {
+func jsonEscapeCopyAMD64Lowering() *x86.Lowering {
+	return &x86.Lowering{
+		Compatibility: x86.CompatibilityFullAccess,
+		Features:      x86.FeatureAVX2,
+		Emit: func(ctx x86.Context) error {
 			var result x86.Reg
 			for chunk := uint32(0); chunk < 2; chunk++ {
 				offset := chunk * 32
@@ -204,11 +204,11 @@ func jsonEscapeCopyAMD64Lowering() *wago.AMD64InstructionLowering {
 	}
 }
 
-func jsonEscapeCopyAVX512Lowering() *wago.AMD64InstructionLowering {
-	return &wago.AMD64InstructionLowering{
-		Compatibility: wago.AMD64CompatibilityFullAccess,
-		Features:      wago.AMD64FeatureAVX512,
-		Emit: func(ctx wago.AMD64LoweringContext) error {
+func jsonEscapeCopyAVX512Lowering() *x86.Lowering {
+	return &x86.Lowering{
+		Compatibility: x86.CompatibilityFullAccess,
+		Features:      x86.FeatureAVX512,
+		Emit: func(ctx x86.Context) error {
 			const (
 				value = x86.Reg(0)
 				splat = x86.Reg(1)
@@ -293,11 +293,11 @@ func jsonEscapeCopyAVX512Lowering() *wago.AMD64InstructionLowering {
 	}
 }
 
-func jsonEscapeCopy256AVX512Lowering() *wago.AMD64InstructionLowering {
-	return &wago.AMD64InstructionLowering{
-		Compatibility: wago.AMD64CompatibilityFullAccess,
-		Features:      wago.AMD64FeatureAVX512,
-		Emit: func(ctx wago.AMD64LoweringContext) error {
+func jsonEscapeCopy256AVX512Lowering() *x86.Lowering {
+	return &x86.Lowering{
+		Compatibility: x86.CompatibilityFullAccess,
+		Features:      x86.FeatureAVX512,
+		Emit: func(ctx x86.Context) error {
 			for reg := x86.Reg(0); reg <= 6; reg++ {
 				if err := ctx.ReserveYMM(reg); err != nil {
 					return err
@@ -373,11 +373,11 @@ func jsonEscapeCopy256AVX512Lowering() *wago.AMD64InstructionLowering {
 	}
 }
 
-func jsonEscapeCopyBulkAVX512Lowering() *wago.AMD64InstructionLowering {
-	return &wago.AMD64InstructionLowering{
-		Compatibility: wago.AMD64CompatibilityFullAccess,
-		Features:      wago.AMD64FeatureAVX512,
-		Emit: func(ctx wago.AMD64LoweringContext) error {
+func jsonEscapeCopyBulkAVX512Lowering() *x86.Lowering {
+	return &x86.Lowering{
+		Compatibility: x86.CompatibilityFullAccess,
+		Features:      x86.FeatureAVX512,
+		Emit: func(ctx x86.Context) error {
 			for reg := x86.Reg(0); reg <= 6; reg++ {
 				if err := ctx.ReserveYMM(reg); err != nil {
 					return err
@@ -477,11 +477,11 @@ func jsonEscapeCopyBulkAVX512Lowering() *wago.AMD64InstructionLowering {
 	}
 }
 
-func jsonFindQuoteBackslashAVX512Lowering() *wago.AMD64InstructionLowering {
-	return &wago.AMD64InstructionLowering{
-		Compatibility: wago.AMD64CompatibilityFullAccess,
-		Features:      wago.AMD64FeatureAVX512,
-		Emit: func(ctx wago.AMD64LoweringContext) error {
+func jsonFindQuoteBackslashAVX512Lowering() *x86.Lowering {
+	return &x86.Lowering{
+		Compatibility: x86.CompatibilityFullAccess,
+		Features:      x86.FeatureAVX512,
+		Emit: func(ctx x86.Context) error {
 			const (
 				value = x86.Reg(0)
 				splat = x86.Reg(1)
@@ -530,7 +530,7 @@ func jsonFindQuoteBackslashAVX512Lowering() *wago.AMD64InstructionLowering {
 	}
 }
 
-func jsonEscapeMaskYMM(ctx wago.AMD64LoweringContext, value x86.Reg) x86.Reg {
+func jsonEscapeMaskYMM(ctx x86.Context, value x86.Reg) x86.Reg {
 	a := ctx.Encoder()
 	eq := ctx.ConstYMMRepeated128(0x0022002200220022, 0x0022002200220022)
 	a.YPcmpeqw(eq, value, eq)
@@ -564,16 +564,16 @@ func jsonEscapeMaskYMM(ctx wago.AMD64LoweringContext, value x86.Reg) x86.Reg {
 	return mask
 }
 
-func amd64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64InstructionLowering {
+func amd64Lowering(bits uint16, opcode uint32, arity int) *x86.Lowering {
 	useZMM := bits == 512 && shouldUseZMM(opcode)
-	features := wago.AMD64FeatureAVX2
+	features := x86.FeatureAVX2
 	if useZMM {
-		features = wago.AMD64FeatureAVX512
+		features = x86.FeatureAVX512
 	}
-	return &wago.AMD64InstructionLowering{
-		Compatibility: wago.AMD64CompatibilityFullAccess,
+	return &x86.Lowering{
+		Compatibility: x86.CompatibilityFullAccess,
 		Features:      features,
-		Emit: func(ctx wago.AMD64LoweringContext) error {
+		Emit: func(ctx x86.Context) error {
 			chunk := amd64ChunkBytes(opcode)
 			if useZMM {
 				chunk = 64
@@ -629,10 +629,10 @@ func amd64Lowering(bits uint16, opcode uint32, arity int) *wago.AMD64Instruction
 	}
 }
 
-func arm64Lowering(bits uint16, opcode uint32, arity int) *wago.ARM64InstructionLowering {
-	return &wago.ARM64InstructionLowering{
-		Compatibility: wago.ARM64CompatibilityFullAccess,
-		Emit: func(ctx wago.ARM64LoweringContext) error {
+func arm64Lowering(bits uint16, opcode uint32, arity int) *a64.Lowering {
+	return &a64.Lowering{
+		Compatibility: a64.CompatibilityFullAccess,
+		Emit: func(ctx a64.Context) error {
 			type address struct {
 				base, index a64.Reg
 				disp        int32

@@ -26,7 +26,7 @@ func TestEmittedAssemblyScriptFixture(t *testing.T) {
 		t.Fatal("plugin-free compile unexpectedly selected wide code")
 	}
 	rt := wago.NewRuntime()
-	if err := rt.Use(New()); err != nil {
+	if err := loadWide(rt, Config{}); err != nil {
 		t.Fatal(err)
 	}
 	native, err := rt.Compile(b)
