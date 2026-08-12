@@ -31,6 +31,8 @@ func main() {
 		Selections: []wago.PluginSelection{{
 			ID:               definition.ID,
 			DefinitionDigest: digest,
+			Direct:           true,
+			Dependencies:     map[string]string{},
 			Grants: []wago.AuthorityGrant{
 				{Name: wago.AuthorityCompilerTypeDefine, Scope: wago.AuthorityScope{Modules: []string{"wide"}}},
 				{Name: wago.AuthorityCompilerInstructionDefine, Scope: wago.AuthorityScope{Modules: []string{wide.InstructionModule}}},
