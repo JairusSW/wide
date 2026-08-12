@@ -4,6 +4,7 @@ package wide
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime"
@@ -16,7 +17,7 @@ import (
 
 func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 	rt := wago.NewRuntime()
-	if err := rt.Use(New()); err != nil {
+	if err := loadWide(rt, Config{}); err != nil {
 		t.Fatal(err)
 	}
 	imports := rt.ProvidedImports()
@@ -87,6 +88,28 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 	}
 }
 
+func TestProviderRejectsStrictInvalidConfig(t *testing.T) {
+	provider := Provider()
+	for _, config := range []json.RawMessage{
+		json.RawMessage(`null`),
+		json.RawMessage(`[]`),
+		json.RawMessage(`{"carrier":null}`),
+		json.RawMessage(`{"carrier":"i32","carrier":"i64"}`),
+		json.RawMessage(`{"unknown":1}`),
+		json.RawMessage(`{"carrier":"invalid"}`),
+		json.RawMessage(`{} {}`),
+	} {
+		if err := provider.ValidateConfig(config); err == nil {
+			t.Fatalf("accepted invalid config %s", config)
+		}
+	}
+	for _, config := range []json.RawMessage{nil, json.RawMessage(`{}`), json.RawMessage(`{"carrier":"externref"}`)} {
+		if err := provider.ValidateConfig(config); err != nil {
+			t.Fatalf("rejected valid config %s: %v", config, err)
+		}
+	}
+}
+
 func TestCarrierOptionControlsEveryCustomImport(t *testing.T) {
 	tests := []struct {
 		carrier wago.WasmType
@@ -103,7 +126,7 @@ func TestCarrierOptionControlsEveryCustomImport(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.want.String(), func(t *testing.T) {
 			rt := wago.NewRuntime()
-			if err := rt.Use(New(WithCarrier(tc.carrier))); err != nil {
+			if err := loadWide(rt, Config{Carrier: carrierName(tc.carrier)}); err != nil {
 				t.Fatal(err)
 			}
 			seen := 0
@@ -141,7 +164,7 @@ func TestV256AndV512ImportsLowerNativelyAndExecute(t *testing.T) {
 		t.Run(fmt.Sprintf("v%d", bits), func(t *testing.T) {
 			wasm := kernelImportModule(bits, 81, 3) // v128.xor mirrored across the width
 			rt := wago.NewRuntime()
-			if err := rt.Use(New()); err != nil {
+			if err := loadWide(rt, Config{}); err != nil {
 				t.Fatal(err)
 			}
 			mod, err := rt.Compile(wasm)
@@ -181,7 +204,7 @@ func TestExternrefVectorsStayNativeAcrossExpressionChain(t *testing.T) {
 		t.Run(fmt.Sprintf("v%d", bits), func(t *testing.T) {
 			wasm := virtualKernelModule(bits, 81, 2)
 			rt := wago.NewRuntime()
-			if err := rt.Use(New()); err != nil {
+			if err := loadWide(rt, Config{}); err != nil {
 				t.Fatal(err)
 			}
 			mod, err := rt.Compile(wasm)
@@ -217,7 +240,7 @@ func TestExternrefExpressionChainAvoidsIntermediateMemory(t *testing.T) {
 	for _, bits := range []uint16{256, 512} {
 		t.Run(fmt.Sprintf("v%d", bits), func(t *testing.T) {
 			rt := wago.NewRuntime()
-			if err := rt.Use(New()); err != nil {
+			if err := loadWide(rt, Config{}); err != nil {
 				t.Fatal(err)
 			}
 			mod, err := rt.Compile(unaryChainModule(bits, 77, depth, true)) // v128.not
@@ -258,7 +281,7 @@ func TestV512FallsBackWhenAVX512Disabled(t *testing.T) {
 	}
 	t.Setenv("WIDE_DISABLE_AVX512", "1")
 	rt := wago.NewRuntime()
-	if err := rt.Use(New()); err != nil {
+	if err := loadWide(rt, Config{}); err != nil {
 		t.Fatal(err)
 	}
 	mod, err := rt.Compile(kernelImportModule(512, 81, 3))
@@ -319,7 +342,7 @@ func TestV512ZMMMatchesYMMFallback(t *testing.T) {
 					_ = os.Setenv("WIDE_FORCE_AVX512", "1")
 				}
 				rt := wago.NewRuntime()
-				if err := rt.Use(New()); err != nil {
+				if err := loadWide(rt, Config{}); err != nil {
 					t.Fatal(err)
 				}
 				mod, err := rt.Compile(kernelImportModule(512, sub, arity+1))
@@ -363,7 +386,7 @@ func TestV512ZMMMatchesYMMFallback(t *testing.T) {
 
 func TestInstructionPhysicalSignatureIsChecked(t *testing.T) {
 	rt := wago.NewRuntime()
-	if err := rt.Use(New()); err != nil {
+	if err := loadWide(rt, Config{}); err != nil {
 		t.Fatal(err)
 	}
 	// XOR needs dst + two source i32 values; this module declares only two.
@@ -376,7 +399,7 @@ func TestWideSIMDChecksCompleteRangesBeforeWriting(t *testing.T) {
 	for _, bits := range []uint16{256, 512} {
 		t.Run(fmt.Sprintf("v%d", bits), func(t *testing.T) {
 			rt := wago.NewRuntime()
-			if err := rt.Use(New()); err != nil {
+			if err := loadWide(rt, Config{}); err != nil {
 				t.Fatal(err)
 			}
 			mod, err := rt.Compile(kernelImportModule(bits, 81, 3))
@@ -410,7 +433,7 @@ func TestConstantRangeProofRejectsPartialVectors(t *testing.T) {
 	for _, bits := range []uint16{256, 512} {
 		t.Run(fmt.Sprintf("v%d", bits), func(t *testing.T) {
 			rt := wago.NewRuntime()
-			if err := rt.Use(New()); err != nil {
+			if err := loadWide(rt, Config{}); err != nil {
 				t.Fatal(err)
 			}
 			bad := int32(65536 - int(bits/16))
@@ -432,7 +455,7 @@ func TestConstantRangeProofRejectsPartialVectors(t *testing.T) {
 
 func TestEverySemanticImportCompilesNatively(t *testing.T) {
 	rt := wago.NewRuntime()
-	if err := rt.Use(New()); err != nil {
+	if err := loadWide(rt, Config{}); err != nil {
 		t.Fatal(err)
 	}
 	for sub := range canonicalNames {
@@ -473,7 +496,7 @@ func BenchmarkWideSIMDWrapper(b *testing.B) {
 	for _, bits := range []uint16{256, 512} {
 		b.Run(fmt.Sprintf("v%d", bits), func(b *testing.B) {
 			rt := wago.NewRuntime()
-			if err := rt.Use(New()); err != nil {
+			if err := loadWide(rt, Config{}); err != nil {
 				b.Fatal(err)
 			}
 			mod, err := rt.Compile(kernelLoopModule(bits, 81, 128))
@@ -509,7 +532,7 @@ func BenchmarkExternrefExpressionChain(b *testing.B) {
 			}
 			b.Run(fmt.Sprintf("v%d/%s", bits, name), func(b *testing.B) {
 				rt := wago.NewRuntime()
-				if err := rt.Use(New()); err != nil {
+				if err := loadWide(rt, Config{}); err != nil {
 					b.Fatal(err)
 				}
 				mod, err := rt.Compile(unaryChainModule(bits, 77, depth, virtual))
@@ -539,7 +562,7 @@ func BenchmarkExternrefExpressionChain(b *testing.B) {
 func BenchmarkV512I64Mul(b *testing.B) {
 	const iterations = 10_000
 	rt := wago.NewRuntime()
-	if err := rt.Use(New()); err != nil {
+	if err := loadWide(rt, Config{}); err != nil {
 		b.Fatal(err)
 	}
 	mod, err := rt.Compile(kernelLoopModule(512, 213, 128))

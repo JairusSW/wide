@@ -1,15 +1,29 @@
 {
-  "$schema": "https://wago.sh/v0/schema.json",
-  "module": "github.com/JairusSW/wide",
-  "name": "Wide",
-  "version": "0.0.0",
-  "description": "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering.",
-  "stability": "experimental",
-  "license": "MIT",
-  "homepage": "https://github.com/JairusSW/wide",
-  "repository": "https://github.com/JairusSW/wide",
-  "authors": ["Jairus Tanaka"],
-  "keywords": ["simd", "avx512", "avx2", "neon", "assemblyscript", "compiler"],
-  "engines": { "wago": ">=0.1.0", "go": ">=1.22", "tinygo": ">=0.41.1" },
-  "platforms": ["linux/amd64", "linux/arm64"]
+  "$schema": "https://wago.sh/v1/schema.json",
+  "package": {
+    "module": "github.com/JairusSW/wide",
+    "version": "0.2.0",
+    "name": "Wide",
+    "description": "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering.",
+    "stability": "experimental",
+    "license": "MIT",
+    "homepage": "https://github.com/JairusSW/wide",
+    "repository": "https://github.com/JairusSW/wide",
+    "category": "compiler",
+    "tags": ["simd", "avx512", "avx2", "neon", "assemblyscript", "compiler"],
+    "authors": [{ "name": "Jairus Tanaka", "github": "JairusSW" }],
+    "engines": {
+      "wago": ">=0.1.0",
+      "go": ">=1.22",
+      "tinygo": ">=0.41.1"
+    },
+    "platforms": [
+      "darwin/amd64",
+      "darwin/arm64",
+      "linux/amd64",
+      "linux/arm64",
+      "windows/amd64",
+      "windows/arm64"
+    ]
+  }
 }

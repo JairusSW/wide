@@ -1,0 +1,79 @@
+{
+  "$schema": "https://wago.sh/v1/providers.schema.json",
+  "providers": [
+    {
+      "importPath": "github.com/JairusSW/wide/register",
+      "definition": {
+        "id": "github.com/JairusSW/wide",
+        "name": "Wide",
+        "version": "0.2.0",
+        "description": "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "go": "\u003e=1.22",
+            "tinygo": "\u003e=0.41.1",
+            "wago": "\u003e=0.1.0"
+          },
+          "platforms": [
+            "darwin/amd64",
+            "darwin/arm64",
+            "linux/amd64",
+            "linux/arm64",
+            "windows/amd64",
+            "windows/arm64"
+          ]
+        },
+        "provenance": {
+          "homepage": "https://github.com/JairusSW/wide",
+          "repository": "https://github.com/JairusSW/wide",
+          "license": "MIT",
+          "authors": [
+            "Jairus Tanaka"
+          ]
+        },
+        "authorities": [
+          {
+            "name": "compiler.instruction.define",
+            "mode": "required",
+            "reason": "define and lower the as-simd guest instruction ABI",
+            "scope": {
+              "modules": [
+                "as-simd"
+              ]
+            }
+          },
+          {
+            "name": "compiler.type.define",
+            "mode": "required",
+            "reason": "define Wide's compiler-erased vector value types",
+            "scope": {
+              "modules": [
+                "wide"
+              ]
+            }
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "carrier": {
+              "enum": [
+                "i32",
+                "i64",
+                "f32",
+                "f64",
+                "v128",
+                "funcref",
+                "externref"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "definitionDigest": "sha256:61af293f55d3f39f59a35545c1c0563b06ea367040d5873fab6921ef6b0bfe93"
+    }
+  ]
+}

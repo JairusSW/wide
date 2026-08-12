@@ -21,7 +21,22 @@ func main() {
 	}
 
 	rt := wago.NewRuntime()
-	if err := rt.Use(wide.New()); err != nil {
+	definition := wide.Definition()
+	digest, err := wago.DefinitionDigest(definition)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := rt.LoadPlugins(context.Background(), wago.PluginSet{
+		Providers: []wago.PluginProvider{wide.Provider()},
+		Selections: []wago.PluginSelection{{
+			ID:               definition.ID,
+			DefinitionDigest: digest,
+			Grants: []wago.AuthorityGrant{
+				{Name: wago.AuthorityCompilerTypeDefine, Scope: wago.AuthorityScope{Modules: []string{"wide"}}},
+				{Name: wago.AuthorityCompilerInstructionDefine, Scope: wago.AuthorityScope{Modules: []string{wide.InstructionModule}}},
+			},
+		}},
+	}); err != nil {
 		log.Fatal(err)
 	}
 	defer rt.Close()

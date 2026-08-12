@@ -1,9 +1,6 @@
 package wide
 
-import (
-	wago "github.com/wago-org/wago"
-	x86 "github.com/wago-org/wago/codegen/amd64"
-)
+import x86 "github.com/wago-org/wago/codegen/amd64"
 
 func amd64ChunkBytes(opcode uint32) uint32 {
 	switch opcode {
@@ -14,7 +11,7 @@ func amd64ChunkBytes(opcode uint32) uint32 {
 	}
 }
 
-func emitAMD64YMM(ctx wago.AMD64LoweringContext, opcode uint32, raw []uint8) (x86.Reg, error) {
+func emitAMD64YMM(ctx x86.Context, opcode uint32, raw []uint8) (x86.Reg, error) {
 	inputs := make([]x86.Reg, len(raw))
 	for i := range raw {
 		inputs[i] = x86.Reg(raw[i])
