@@ -1,6 +1,7 @@
 package wide_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"reflect"
@@ -70,7 +71,10 @@ func assertProviderCatalogCurrent(t *testing.T, importPath string, providers []w
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, want) {
+	// Git for Windows may materialize committed text with CRLF. The generated
+	// catalog contract is otherwise byte-for-byte deterministic.
+	got = bytes.ReplaceAll(got, []byte("\r\n"), []byte("\n"))
+	if !bytes.Equal(got, want) {
 		t.Fatalf("%s is stale; run wago plugin catalog", wago.ProviderCatalogFile)
 	}
 	if _, err := wago.DecodeProviderCatalog(got); err != nil {
