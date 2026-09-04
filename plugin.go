@@ -245,7 +245,7 @@ func Definition() wago.PluginDefinition {
 	return wago.PluginDefinition{
 		ID:          PluginID,
 		Name:        "Wide",
-		Version:     "0.2.0",
+		Version:     "0.2.1",
 		Description: "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering.",
 		Stability:   wago.Experimental,
 		Compatibility: wago.Compatibility{

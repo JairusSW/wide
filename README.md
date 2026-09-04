@@ -56,7 +56,7 @@ What you get out of the box:
   can call Wide with ordinary function imports. No custom section or custom
   Wasm type is required.
 
-> **Stability:** experimental (`v0.2.0`). The plugin ABI and backend selection
+> **Stability:** experimental (`v0.2.1`). The plugin ABI and backend selection
 > policy may change before `v1.0.0`.
 
 ## Installation
@@ -80,7 +80,7 @@ go get github.com/JairusSW/wide
 {
   "$schema": "https://wago.sh/v1/schema.json",
   "plugins": {
-    "github.com/JairusSW/wide": "^0.2.0"
+    "github.com/JairusSW/wide": "^0.2.1"
   }
 }
 ```
@@ -211,7 +211,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	memory := instance.Memory().Bytes()
+	memory, ok := instance.Read(0, 32)
+	if !ok {
+		log.Fatal("result is outside linear memory")
+	}
 	lanes := make([]uint32, 8)
 	for i := range lanes {
 		lanes[i] = binary.LittleEndian.Uint32(memory[i*4:])
@@ -344,8 +347,8 @@ These switches are diagnostic controls, not guest-visible ABI.
 | Go toolchain | `>= 1.22` |
 | TinyGo toolchain | `>= 0.41.1`; build Wago hosts with `-scheduler=tasks` |
 | Guest ABI | standard `i32` and `externref` Wasm imports under `"as-simd"`; optional pointer-only `.memory` imports |
-| `linux/amd64` | AVX2 required; AVX-512F/DQ/BW selected when available and profitable |
-| `linux/arm64` | NEON |
+| `darwin`, `linux`, `windows` on `amd64` | AVX2 required; AVX-512F/DQ/BW selected when available and profitable |
+| `darwin`, `linux`, `windows` on `arm64` | NEON |
 | Producer | `as-simd` transform; any language may emit the same imports |
 
 Identity, engine constraints, platforms, and registry metadata live in
@@ -396,15 +399,18 @@ The self-contained suite:
 - byte-compares direct ZMM output with the YMM fallback;
 - executes representative v256 and v512 modules end to end.
 
-To test a real module emitted by the AssemblyScript transform:
+To build `as-simd`'s wide fixture in portable and Wide modes and compare 16
+representative v256/v512 kernel results:
 
 ```sh
-AS_SIMD_EMITTED_FIXTURE=/path/to/module.wasm \
-  go test -run TestEmittedAssemblyScriptFixture
+AS_SIMD_DIR=../../AssemblyScript/as-simd \
+  go test -run TestAssemblyScriptTransformParity -v
 ```
 
-CI runs formatting, vet, race tests with coverage, and an arm64 test-binary
-cross-compile.
+CI runs formatting, vet, race tests with coverage, a Wago-`main` compatibility
+lane, TinyGo example coverage, and native execution on Darwin, Linux, and
+Windows for both amd64 and arm64. Every native cell also runs the AssemblyScript
+portable/Wide differential suite and repeated execution stress tests.
 
 ## Architecture
 

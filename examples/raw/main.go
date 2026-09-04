@@ -57,7 +57,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	memory := instance.Memory().Bytes()
+	memory, ok := instance.Read(0, 32)
+	if !ok {
+		log.Fatal("result is outside linear memory")
+	}
 	lanes := make([]uint32, 8)
 	for i := range lanes {
 		lanes[i] = binary.LittleEndian.Uint32(memory[i*4:])
