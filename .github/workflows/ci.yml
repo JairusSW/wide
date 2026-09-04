@@ -4,12 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,8 +26,81 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
-      - name: Cross-compile arm64 tests
-        run: GOOS=linux GOARCH=arm64 go test -c -o wide.test .
+
+  native:
+    name: Native ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux/amd64
+            runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+          - target: linux/arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+          - target: darwin/amd64
+            runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - target: darwin/arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+          - target: windows/amd64
+            runner: windows-2025
+            goos: windows
+            goarch: amd64
+          - target: windows/arm64
+            runner: windows-11-arm
+            goos: windows
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/checkout@v4
+        with:
+          repository: JairusSW/as-simd
+          path: .as-simd
+      - name: Verify runner architecture
+        shell: bash
+        run: |
+          test "$(go env GOOS)" = "${{ matrix.goos }}"
+          test "$(go env GOARCH)" = "${{ matrix.goarch }}"
+      - name: Install as-simd dependencies
+        working-directory: .as-simd
+        run: npm install --package-lock=false
+      - name: Native Go suite
+        run: go test -count=1 ./...
+      - name: AssemblyScript portable/Wide parity
+        env:
+          AS_SIMD_DIR: ${{ github.workspace }}/.as-simd
+        run: go test -count=1 -run '^TestAssemblyScriptTransformParity$' -v .
+      - name: Repeated execution stress
+        run: go test -count=10 -run '^(TestV256AndV512ImportsLowerNativelyAndExecute|TestExternrefVectorsStayNativeAcrossExpressionChain|TestWideSIMDChecksCompleteRangesBeforeWriting)$' .
+
+  wago-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+      - name: Test against Wago main
+        run: |
+          go get github.com/wago-org/wago@main
+          go mod tidy
+          go test -count=1 ./...
 
   tinygo:
     runs-on: ubuntu-latest

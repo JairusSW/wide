@@ -180,7 +180,7 @@ func TestV256AndV512ImportsLowerNativelyAndExecute(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer in.Close()
-			memory := in.Memory().Bytes()
+			memory := in.Memory().UnsafeBytes()
 			n := int(bits / 8)
 			for i := 0; i < n; i++ {
 				memory[64+i] = byte(i*3 + 1)
@@ -216,7 +216,7 @@ func TestExternrefVectorsStayNativeAcrossExpressionChain(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer in.Close()
-			memory := in.Memory().Bytes()
+			memory := in.Memory().UnsafeBytes()
 			n := int(bits / 8)
 			for i := 0; i < n; i++ {
 				memory[64+i] = byte(i*3 + 1)
@@ -252,7 +252,7 @@ func TestExternrefExpressionChainAvoidsIntermediateMemory(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer in.Close()
-			memory := in.Memory().Bytes()
+			memory := in.Memory().UnsafeBytes()
 			for i := 0; i < int(bits/8); i++ {
 				memory[64+i] = byte(i*37 + 11)
 			}
@@ -361,7 +361,7 @@ func TestV512ZMMMatchesYMMFallback(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer instance.Close()
-				memory := instance.Memory().Bytes()
+				memory := instance.Memory().UnsafeBytes()
 				args := make([]uint64, arity+1)
 				for input := 0; input < arity; input++ {
 					ptr := 64 + input*64
@@ -411,7 +411,7 @@ func TestWideSIMDChecksCompleteRangesBeforeWriting(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer instance.Close()
-			memory := instance.Memory().Bytes()
+			memory := instance.Memory().UnsafeBytes()
 			for i := 0; i < int(bits/8); i++ {
 				memory[i] = 0xa5
 			}
