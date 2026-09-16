@@ -56,7 +56,7 @@ What you get out of the box:
   can call Wide with ordinary function imports. No custom section or custom
   Wasm type is required.
 
-> **Stability:** experimental (`v0.2.1`). The plugin ABI and backend selection
+> **Stability:** experimental (`v0.2.2`). The plugin ABI and backend selection
 > policy may change before `v1.0.0`.
 
 ## Installation
@@ -80,7 +80,7 @@ go get github.com/JairusSW/wide
 {
   "$schema": "https://wago.sh/v1/schema.json",
   "plugins": {
-    "github.com/JairusSW/wide": "^0.2.1"
+    "github.com/JairusSW/wide": "^0.2.2"
   }
 }
 ```

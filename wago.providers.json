@@ -6,7 +6,7 @@
       "definition": {
         "id": "github.com/JairusSW/wide",
         "name": "Wide",
-        "version": "0.2.1",
+        "version": "0.2.2",
         "description": "Portable v256 and v512 instructions with native AVX-512, AVX2, and NEON lowering.",
         "stability": "experimental",
         "compatibility": {
@@ -73,7 +73,7 @@
           "type": "object"
         }
       },
-      "definitionDigest": "sha256:66cc256bb00c1ee2d677600d477a0da4aae04d4844c5b174d4b63f02e78e8181"
+      "definitionDigest": "sha256:4dc4432eb60ae5ae795c0e62968b7903e26d2920f9979e1929ba3c28721b4a81"
     }
   ]
 }
