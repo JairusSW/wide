@@ -5,6 +5,7 @@ package wide
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -180,6 +181,111 @@ func asciiScanHandler(width uint32) wago.InstructionHandler {
 			return nil, err
 		}
 		return []wago.Bits{result}, nil
+	}
+}
+
+func utf8ValidateBlockHandler(width uint32) wago.InstructionHandler {
+	return func(ctx wago.InstructionContext, args []wago.Bits) ([]wago.Bits, error) {
+		if len(args) != 1 {
+			return nil, fmt.Errorf("UTF-8 block validation requires a pointer")
+		}
+		p := uint64(args[0].Uint32())
+		mem := ctx.Memory()
+		if p+uint64(width)+3 > uint64(len(mem)) {
+			return nil, fmt.Errorf("UTF-8 block access is out of bounds")
+		}
+		var bad byte
+		between := func(b, lo, hi byte) bool { return b >= lo && b <= hi }
+		for i := uint64(3); i < uint64(width)+3; i++ {
+			b, p1, p2, p3 := mem[p+i], mem[p+i-1], mem[p+i-2], mem[p+i-3]
+			expected := between(p1, 0xc2, 0xf4) || between(p2, 0xe0, 0xf4) || between(p3, 0xf0, 0xf4)
+			actual := between(b, 0x80, 0xbf)
+			invalid := expected != actual || between(b, 0xc0, 0xc1) || b >= 0xf5 ||
+				p1 == 0xe0 && b < 0xa0 || p1 == 0xed && b >= 0xa0 ||
+				p1 == 0xf0 && b < 0x90 || p1 == 0xf4 && b >= 0x90
+			if invalid {
+				bad = 1
+				break
+			}
+		}
+		value, err := wago.NewBits(32, []byte{bad, 0, 0, 0})
+		if err != nil {
+			return nil, err
+		}
+		return []wago.Bits{value}, nil
+	}
+}
+
+func utf16ValidateBlockHandler(width uint32) wago.InstructionHandler {
+	return func(ctx wago.InstructionContext, args []wago.Bits) ([]wago.Bits, error) {
+		if len(args) != 1 {
+			return nil, fmt.Errorf("UTF-16 block validation requires a pointer")
+		}
+		p := uint64(args[0].Uint32())
+		mem := ctx.Memory()
+		if p+uint64(width)+2 > uint64(len(mem)) {
+			return nil, fmt.Errorf("UTF-16 block access is out of bounds")
+		}
+		var bad byte
+		for i := uint64(0); i < uint64(width); i += 2 {
+			previous := binary.LittleEndian.Uint16(mem[p+i : p+i+2])
+			current := binary.LittleEndian.Uint16(mem[p+i+2 : p+i+4])
+			high := previous&0xfc00 == 0xd800
+			low := current&0xfc00 == 0xdc00
+			if high != low {
+				bad = 1
+				break
+			}
+		}
+		value, err := wago.NewBits(32, []byte{bad, 0, 0, 0})
+		if err != nil {
+			return nil, err
+		}
+		return []wago.Bits{value}, nil
+	}
+}
+
+func utfLengthBlockHandler(width uint32, utf16ToUTF8 bool) wago.InstructionHandler {
+	return func(ctx wago.InstructionContext, args []wago.Bits) ([]wago.Bits, error) {
+		if len(args) != 1 {
+			return nil, fmt.Errorf("UTF length block requires a pointer")
+		}
+		p := uint64(args[0].Uint32())
+		mem := ctx.Memory()
+		if p+uint64(width) > uint64(len(mem)) {
+			return nil, fmt.Errorf("UTF length block access is out of bounds")
+		}
+		total := int32(width)
+		if utf16ToUTF8 {
+			total /= 2
+			for i := uint64(0); i < uint64(width); i += 2 {
+				u := binary.LittleEndian.Uint16(mem[p+i : p+i+2])
+				if u >= 0x80 {
+					total++
+				}
+				if u >= 0x800 {
+					total++
+				}
+				if u >= 0xdc00 && u <= 0xdfff {
+					total -= 2
+				}
+			}
+		} else {
+			for i := uint64(0); i < uint64(width); i++ {
+				b := mem[p+i]
+				if b&0xc0 == 0x80 {
+					total--
+				}
+				if b&0xf8 == 0xf0 {
+					total++
+				}
+			}
+		}
+		value, err := wago.NewBits(32, []byte{byte(total), byte(total >> 8), byte(total >> 16), byte(total >> 24)})
+		if err != nil {
+			return nil, err
+		}
+		return []wago.Bits{value}, nil
 	}
 }
 
@@ -394,6 +500,38 @@ func (e *plugin) Register(reg *wago.Registrar) error {
 	}
 	for _, bits := range []uint16{256, 512} {
 		width := bits / 8
+		if err := instructions.Define(wago.InstructionSpec{
+			Module: InstructionModule, Name: "utf16.length_utf8_block_" + itoa(int(bits)),
+			Input: []int32{32}, Output: []int32{32},
+			Handler: utfLengthBlockHandler(uint32(width), false),
+			Codegen: selectTargetLowering(utf16LengthUTF8BlockAMD64Lowering(uint32(width)), nil),
+		}); err != nil {
+			return err
+		}
+		if err := instructions.Define(wago.InstructionSpec{
+			Module: InstructionModule, Name: "utf8.length_utf16_block_" + itoa(int(bits)),
+			Input: []int32{32}, Output: []int32{32},
+			Handler: utfLengthBlockHandler(uint32(width), true),
+			Codegen: selectTargetLowering(utf8LengthUTF16BlockAMD64Lowering(uint32(width)), nil),
+		}); err != nil {
+			return err
+		}
+		if err := instructions.Define(wago.InstructionSpec{
+			Module: InstructionModule, Name: "utf16.validate_block_" + itoa(int(bits)),
+			Input: []int32{32}, Output: []int32{32},
+			Handler: utf16ValidateBlockHandler(uint32(width)),
+			Codegen: selectTargetLowering(utf16ValidateBlockAMD64Lowering(uint32(width)), nil),
+		}); err != nil {
+			return err
+		}
+		if err := instructions.Define(wago.InstructionSpec{
+			Module: InstructionModule, Name: "utf8.validate_block_" + itoa(int(bits)),
+			Input: []int32{32}, Output: []int32{32},
+			Handler: utf8ValidateBlockHandler(uint32(width)),
+			Codegen: selectTargetLowering(utf8ValidateBlockAMD64Lowering(uint32(width)), nil),
+		}); err != nil {
+			return err
+		}
 		if err := instructions.Define(wago.InstructionSpec{
 			Module: InstructionModule, Name: "ascii.scan_" + itoa(int(bits)),
 			Input: []int32{32, 32}, Output: []int32{32},
