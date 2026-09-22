@@ -158,6 +158,31 @@ func jsonEscapeCopyHandler(ctx wago.InstructionContext, args []wago.Bits) ([]wag
 	return []wago.Bits{result}, nil
 }
 
+func asciiScanHandler(width uint32) wago.InstructionHandler {
+	return func(ctx wago.InstructionContext, args []wago.Bits) ([]wago.Bits, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("ASCII scan requires source and last-block pointers")
+		}
+		src, last := uint64(args[0].Uint32()), uint64(args[1].Uint32())
+		memory := ctx.Memory()
+		if src+uint64(width) > uint64(len(memory)) || last+uint64(width) > uint64(len(memory)) {
+			return nil, fmt.Errorf("ASCII scan memory access is out of bounds")
+		}
+		var nonASCII byte
+		for src <= last {
+			for _, b := range memory[src : src+uint64(width)] {
+				nonASCII |= b & 0x80
+			}
+			src += uint64(width)
+		}
+		result, err := wago.NewBits(32, []byte{nonASCII, 0, 0, 0})
+		if err != nil {
+			return nil, err
+		}
+		return []wago.Bits{result}, nil
+	}
+}
+
 func jsonEscapeCopy256Handler(ctx wago.InstructionContext, args []wago.Bits) ([]wago.Bits, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("256-byte JSON escape-copy requires source and destination pointers")
@@ -368,6 +393,15 @@ func (e *plugin) Register(reg *wago.Registrar) error {
 		}
 	}
 	for _, bits := range []uint16{256, 512} {
+		width := bits / 8
+		if err := instructions.Define(wago.InstructionSpec{
+			Module: InstructionModule, Name: "ascii.scan_" + itoa(int(bits)),
+			Input: []int32{32, 32}, Output: []int32{32},
+			Handler: asciiScanHandler(uint32(width)),
+			Codegen: selectTargetLowering(asciiScanAMD64Lowering(uint32(width)), asciiScanARM64Lowering(uint32(width))),
+		}); err != nil {
+			return err
+		}
 		customType := customTypes[bits]
 		empty := []wago.CustomType{{}}
 		lowering := customLoadLowering(bits)

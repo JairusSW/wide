@@ -21,7 +21,7 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	imports := rt.ProvidedImports()
-	want := len(canonicalNames)*4 + 9
+	want := len(canonicalNames)*4 + 11
 	// Three wago:abi lifecycle imports accompany every custom-instruction plugin.
 	if got := len(imports) - 3; got != want {
 		t.Fatalf("registered instructions=%d, want %d", got, want)
@@ -36,7 +36,12 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 		if strings.Contains(spec.Name, ".fd.") {
 			t.Fatalf("%s exposes an engine opcode instead of a SIMD semantic name", spec.Name)
 		}
-		if strings.HasPrefix(spec.Name, "json.escape_copy_utf16_") {
+		if strings.HasPrefix(spec.Name, "ascii.scan_") {
+			if len(spec.Params) != 2 || spec.Params[0] != wago.ValI32 || spec.Params[1] != wago.ValI32 ||
+				len(spec.Results) != 1 || spec.Results[0] != wago.ValI32 {
+				t.Fatalf("%s has physical signature %v -> %v, want [i32 i32] -> [i32]", spec.Name, spec.Params, spec.Results)
+			}
+		} else if strings.HasPrefix(spec.Name, "json.escape_copy_utf16_") {
 			wantParams := 2
 			if spec.Name == "json.escape_copy_utf16_bulk.v512" {
 				wantParams = 4
@@ -134,7 +139,7 @@ func TestCarrierOptionControlsEveryCustomImport(t *testing.T) {
 				if spec.Module != InstructionModule || strings.HasSuffix(spec.Name, ".memory") {
 					continue
 				}
-				if strings.HasPrefix(spec.Name, "json.") {
+				if strings.HasPrefix(spec.Name, "json.") || strings.HasPrefix(spec.Name, "ascii.scan_") {
 					continue
 				}
 				for i, param := range spec.Params {
@@ -193,6 +198,57 @@ func TestV256AndV512ImportsLowerNativelyAndExecute(t *testing.T) {
 				want := byte(i*3+1) ^ byte(255-i*5)
 				if memory[i] != want {
 					t.Fatalf("byte %d=%#x, want %#x", i, memory[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestASCIIScanImports(t *testing.T) {
+	for _, bits := range []uint16{256, 512} {
+		t.Run(fmt.Sprintf("v%d", bits), func(t *testing.T) {
+			rt := wago.NewRuntime()
+			defer rt.Close()
+			if err := loadWide(rt, Config{}); err != nil {
+				t.Fatal(err)
+			}
+			mod, err := rt.Compile(asciiScanModule(bits))
+			if err != nil {
+				t.Fatal(err)
+			}
+			in, err := rt.Instantiate(context.Background(), mod)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer in.Close()
+			memory := in.Memory().UnsafeBytes()
+			for i := range memory[:4096] {
+				memory[i] = 'a'
+			}
+			width := int(bits / 8)
+			for _, size := range []int{width, width * 3, 4096} {
+				last := size - width
+				for _, dirty := range []int{-1, 0, width - 1, width, size - 1} {
+					if dirty >= size {
+						continue
+					}
+					if dirty >= 0 {
+						memory[dirty] = 0x80
+					}
+					got, err := in.Invoke("run", 0, wago.I32(int32(last)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := uint64(0)
+					if dirty >= 0 {
+						want = 1
+					}
+					if (got[0] != 0) != (want != 0) {
+						t.Fatalf("size=%d dirty=%d got=%v", size, dirty, got)
+					}
+					if dirty >= 0 {
+						memory[dirty] = 'a'
+					}
 				}
 			}
 		})
@@ -584,6 +640,33 @@ func BenchmarkV512I64Mul(b *testing.B) {
 	}
 	elapsed := time.Since(start)
 	b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N)/iterations, "ns/wide-op")
+}
+
+func asciiScanModule(bits uint16) []byte {
+	vec := func(items ...[]byte) []byte {
+		out := uleb(uint32(len(items)))
+		for _, item := range items {
+			out = append(out, item...)
+		}
+		return out
+	}
+	section := func(id byte, body []byte) []byte {
+		return append(append([]byte{id}, uleb(uint32(len(body)))...), body...)
+	}
+	name := func(s string) []byte { return append(uleb(uint32(len(s))), s...) }
+	functionType := []byte{0x60, 2, 0x7f, 0x7f, 1, 0x7f}
+	imp := append(name(InstructionModule), name("ascii.scan_"+itoa(int(bits)))...)
+	imp = append(imp, 0, 0)
+	body := []byte{0, 0x20, 0, 0x20, 1, 0x10, 0, 0x0b}
+	code := append(uleb(uint32(len(body))), body...)
+	out := []byte{0, 'a', 's', 'm', 1, 0, 0, 0}
+	out = append(out, section(1, vec(functionType))...)
+	out = append(out, section(2, vec(imp))...)
+	out = append(out, section(3, vec([]byte{0}))...)
+	out = append(out, section(5, vec([]byte{0, 1}))...)
+	out = append(out, section(7, vec(append(name("run"), 0, 1), append(name("memory"), 2, 0)))...)
+	out = append(out, section(10, vec(code))...)
+	return out
 }
 
 func kernelImportModule(bits uint16, sub uint32, arity int) []byte {
