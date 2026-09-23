@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	wago "github.com/wago-org/wago"
 )
@@ -23,7 +22,7 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	imports := rt.ProvidedImports()
-	want := len(canonicalNames)*4 + 19
+	want := len(canonicalNames)*4 + 15
 	// Three wago:abi lifecycle imports accompany every custom-instruction plugin.
 	if got := len(imports) - 3; got != want {
 		t.Fatalf("registered instructions=%d, want %d", got, want)
@@ -43,7 +42,7 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 				len(spec.Results) != 1 || spec.Results[0] != wago.ValI32 {
 				t.Fatalf("%s has physical signature %v -> %v, want [i32 i32] -> [i32]", spec.Name, spec.Params, spec.Results)
 			}
-		} else if strings.HasPrefix(spec.Name, "utf8.validate_block_") || strings.HasPrefix(spec.Name, "utf16.validate_block_") || strings.HasPrefix(spec.Name, "utf8.length_utf16_block_") || strings.HasPrefix(spec.Name, "utf16.length_utf8_block_") {
+		} else if strings.HasPrefix(spec.Name, "utf8.length_utf16_block_") || strings.HasPrefix(spec.Name, "utf16.length_utf8_block_") {
 			if len(spec.Params) != 1 || spec.Params[0] != wago.ValI32 || len(spec.Results) != 1 || spec.Results[0] != wago.ValI32 {
 				t.Fatalf("%s has physical signature %v -> %v, want [i32] -> [i32]", spec.Name, spec.Params, spec.Results)
 			}
@@ -145,7 +144,7 @@ func TestCarrierOptionControlsEveryCustomImport(t *testing.T) {
 				if spec.Module != InstructionModule || strings.HasSuffix(spec.Name, ".memory") {
 					continue
 				}
-				if strings.HasPrefix(spec.Name, "json.") || strings.HasPrefix(spec.Name, "ascii.scan_") || strings.HasPrefix(spec.Name, "utf8.validate_block_") || strings.HasPrefix(spec.Name, "utf16.validate_block_") || strings.HasPrefix(spec.Name, "utf8.length_") || strings.HasPrefix(spec.Name, "utf16.length_") {
+				if strings.HasPrefix(spec.Name, "json.") || strings.HasPrefix(spec.Name, "ascii.scan_") || strings.HasPrefix(spec.Name, "utf8.length_") || strings.HasPrefix(spec.Name, "utf16.length_") {
 					continue
 				}
 				for i, param := range spec.Params {
@@ -648,58 +647,13 @@ func BenchmarkV512I64Mul(b *testing.B) {
 	b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N)/iterations, "ns/wide-op")
 }
 
-func TestNativeUTF8Blocks(t *testing.T) {
-	if runtime.GOARCH != "amd64" {
-		t.Skip("AVX2 lowering runs on amd64")
-	}
-	for _, bits := range []uint16{256, 512} {
-		t.Run(itoa(int(bits)), func(t *testing.T) {
-			rt := wago.NewRuntime()
-			if err := loadWide(rt, Config{}); err != nil {
-				t.Fatal(err)
-			}
-			mod, err := rt.Compile(utf8BlockModule(bits))
-			if err != nil {
-				t.Fatal(err)
-			}
-			in, err := rt.Instantiate(context.Background(), mod)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer in.Close()
-			memory := in.Memory().UnsafeBytes()
-			width := int(bits / 8)
-			seed := uint32(0x12345678)
-			for trial := 0; trial < 2000; trial++ {
-				block := memory[256 : 256+width+3]
-				clear(block)
-				for i := 3; i < width; i++ {
-					seed = seed*1664525 + 1013904223
-					block[i] = byte(seed >> 24)
-				}
-				if trial%3 == 0 {
-					copy(block[3:], []byte("Aé中😀Z"))
-				}
-				want := !utf8.Valid(block[3:])
-				got, err := in.Invoke("run", wago.I32(256))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if (got[0] != 0) != want {
-					t.Fatalf("trial %d: native=%v want=%v block=%x", trial, got[0] != 0, want, block)
-				}
-			}
-		})
-	}
-}
-
-func TestNativeUTF16AndLengthBlocks(t *testing.T) {
+func TestNativeUTFLengthBlocks(t *testing.T) {
 	if runtime.GOARCH != "amd64" {
 		t.Skip("AVX2 lowering runs on amd64")
 	}
 	for _, bits := range []uint16{256, 512} {
 		width := int(bits / 8)
-		for _, name := range []string{"utf16.validate_block_", "utf16.length_utf8_block_", "utf8.length_utf16_block_"} {
+		for _, name := range []string{"utf16.length_utf8_block_", "utf8.length_utf16_block_"} {
 			t.Run(name+itoa(int(bits)), func(t *testing.T) {
 				rt := wago.NewRuntime()
 				if err := loadWide(rt, Config{}); err != nil {
@@ -723,15 +677,6 @@ func TestNativeUTF16AndLengthBlocks(t *testing.T) {
 					}
 					want := int32(0)
 					switch name {
-					case "utf16.validate_block_":
-						for i := 0; i < width; i += 2 {
-							prev := binary.LittleEndian.Uint16(data[i:])
-							curr := binary.LittleEndian.Uint16(data[i+2:])
-							if (prev&0xfc00 == 0xd800) != (curr&0xfc00 == 0xdc00) {
-								want = 1
-								break
-							}
-						}
 					case "utf16.length_utf8_block_":
 						want = int32(width)
 						for i := 0; i < width; i++ {
@@ -762,9 +707,6 @@ func TestNativeUTF16AndLengthBlocks(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if name == "utf16.validate_block_" && (got[0] != 0) == (want != 0) {
-						continue
-					}
 					if int32(got[0]) != want {
 						t.Fatalf("trial %d: native=%d want=%d input=%x", trial, got[0], want, data)
 					}
@@ -772,10 +714,6 @@ func TestNativeUTF16AndLengthBlocks(t *testing.T) {
 			})
 		}
 	}
-}
-
-func utf8BlockModule(bits uint16) []byte {
-	return scalarImportModule("utf8.validate_block_" + itoa(int(bits)))
 }
 
 func scalarImportModule(importName string) []byte {
