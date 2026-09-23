@@ -175,6 +175,117 @@ func customStoreLowering(bits uint16) codegen.Lowering {
 	return selectTargetLowering(amd64, arm64)
 }
 
+// asciiScanAMD64Lowering scans an inclusive run of complete 32- or 64-byte
+// blocks. The final pointer is checked once, so the loop keeps data in native
+// YMM registers without round trips through the guest register file.
+func asciiScanAMD64Lowering(width uint32) *x86.Lowering {
+	return &x86.Lowering{
+		Compatibility: x86.CompatibilityFullAccess,
+		Features:      x86.FeatureAVX2,
+		Emit: func(ctx x86.Context) error {
+			_, srcIndex, _, err := ctx.CheckedMemory(0, 0, int(width))
+			if err != nil {
+				return err
+			}
+			ctx.ReleaseGP(srcIndex)
+			_, lastIndex, _, err := ctx.CheckedMemory(1, 0, int(width))
+			if err != nil {
+				return err
+			}
+			ctx.ReleaseGP(lastIndex)
+			src, err := ctx.InputI32(0)
+			if err != nil {
+				return err
+			}
+			last, err := ctx.InputI32(1)
+			if err != nil {
+				return err
+			}
+			mask := ctx.AllocGP(src, last)
+			value := ctx.AllocYMM()
+			acc := ctx.AllocYMM(value)
+			a := ctx.Encoder()
+			a.YPxor(acc, acc, acc)
+			loop := a.Len()
+			for offset := uint32(0); offset < width; offset += 32 {
+				a.YMovdquLoadIdx(value, ctx.MemoryBase(), src, int32(offset))
+				a.YPor(acc, acc, value)
+			}
+			a.AluRI(0, src, int32(width), false)
+			a.Cmp32(src, last)
+			back := a.JccPlaceholder(x86.CondBE)
+			a.PatchRel32(back, loop)
+			a.YPmovmskb(mask, acc)
+			ctx.ReleaseVector(value)
+			ctx.ReleaseVector(acc)
+			ctx.ReleaseGP(src)
+			ctx.ReleaseGP(last)
+			return ctx.OutputI32(mask)
+		},
+	}
+}
+
+func asciiScanARM64Lowering(width uint32) *a64.Lowering {
+	return &a64.Lowering{
+		Compatibility: a64.CompatibilityFullAccess,
+		Emit: func(ctx a64.Context) error {
+			_, srcIndex, _, err := ctx.CheckedMemory(0, 0, int(width))
+			if err != nil {
+				return err
+			}
+			ctx.ReleaseGP(srcIndex)
+			_, lastIndex, _, err := ctx.CheckedMemory(1, 0, int(width))
+			if err != nil {
+				return err
+			}
+			ctx.ReleaseGP(lastIndex)
+			src, err := ctx.InputI32(0)
+			if err != nil {
+				return err
+			}
+			last, err := ctx.InputI32(1)
+			if err != nil {
+				return err
+			}
+			addr := ctx.AllocGP(src, last)
+			end := ctx.AllocGP(src, last, addr)
+			mask := ctx.AllocGP(src, last, addr, end)
+			value := ctx.AllocVector()
+			value2 := ctx.AllocVector(value)
+			acc := ctx.AllocVector(value, value2)
+			a := ctx.Encoder()
+			a.AddExtUXTW(addr, ctx.MemoryBase(), src)
+			a.AddExtUXTW(end, ctx.MemoryBase(), last)
+			a.Eor16b(acc, acc, acc)
+			loop := a.Len()
+			for offset := uint32(0); offset < width; offset += 32 {
+				a.LdpQ(value, value2, addr, int32(offset))
+				a.Orr16b(acc, acc, value)
+				a.Orr16b(acc, acc, value2)
+			}
+			a.AddImm64(addr, addr, width)
+			a.CmpReg64(addr, end)
+			back := a.Bcond(a64.CondLS)
+			if !a.PatchBranch19(back, loop) {
+				return fmt.Errorf("wide: ASCII scan branch is out of range")
+			}
+			a.NeonUmaxvB(acc, acc)
+			a.NeonUmovB(mask, acc, 0)
+			if !a.AndImm32(mask, mask, 0x80) {
+				return fmt.Errorf("wide: cannot encode ASCII high-bit mask")
+			}
+			ctx.ReleaseVector(value)
+			ctx.ReleaseVector(value2)
+			ctx.ReleaseVector(acc)
+			ctx.ReleaseGP(addr)
+			ctx.ReleaseGP(end)
+			ctx.ReleaseGP(src)
+			ctx.ReleaseGP(last)
+			return ctx.OutputI32(mask)
+		},
+	}
+}
+
 func jsonEscapeCopyAMD64Lowering() *x86.Lowering {
 	return &x86.Lowering{
 		Compatibility: x86.CompatibilityFullAccess,
