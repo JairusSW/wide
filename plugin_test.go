@@ -4,7 +4,6 @@ package wide
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,7 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	wago "github.com/wago-org/wago"
 )
@@ -23,7 +21,7 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	imports := rt.ProvidedImports()
-	want := len(canonicalNames)*4 + 19
+	want := len(canonicalNames)*4 + 9
 	// Three wago:abi lifecycle imports accompany every custom-instruction plugin.
 	if got := len(imports) - 3; got != want {
 		t.Fatalf("registered instructions=%d, want %d", got, want)
@@ -38,16 +36,7 @@ func TestRegistersCompleteKernelInstructionCatalog(t *testing.T) {
 		if strings.Contains(spec.Name, ".fd.") {
 			t.Fatalf("%s exposes an engine opcode instead of a SIMD semantic name", spec.Name)
 		}
-		if strings.HasPrefix(spec.Name, "ascii.scan_") {
-			if len(spec.Params) != 2 || spec.Params[0] != wago.ValI32 || spec.Params[1] != wago.ValI32 ||
-				len(spec.Results) != 1 || spec.Results[0] != wago.ValI32 {
-				t.Fatalf("%s has physical signature %v -> %v, want [i32 i32] -> [i32]", spec.Name, spec.Params, spec.Results)
-			}
-		} else if strings.HasPrefix(spec.Name, "utf8.validate_block_") || strings.HasPrefix(spec.Name, "utf16.validate_block_") || strings.HasPrefix(spec.Name, "utf8.length_utf16_block_") || strings.HasPrefix(spec.Name, "utf16.length_utf8_block_") {
-			if len(spec.Params) != 1 || spec.Params[0] != wago.ValI32 || len(spec.Results) != 1 || spec.Results[0] != wago.ValI32 {
-				t.Fatalf("%s has physical signature %v -> %v, want [i32] -> [i32]", spec.Name, spec.Params, spec.Results)
-			}
-		} else if strings.HasPrefix(spec.Name, "json.escape_copy_utf16_") {
+		if strings.HasPrefix(spec.Name, "json.escape_copy_utf16_") {
 			wantParams := 2
 			if spec.Name == "json.escape_copy_utf16_bulk.v512" {
 				wantParams = 4
@@ -145,7 +134,7 @@ func TestCarrierOptionControlsEveryCustomImport(t *testing.T) {
 				if spec.Module != InstructionModule || strings.HasSuffix(spec.Name, ".memory") {
 					continue
 				}
-				if strings.HasPrefix(spec.Name, "json.") || strings.HasPrefix(spec.Name, "ascii.scan_") || strings.HasPrefix(spec.Name, "utf8.validate_block_") || strings.HasPrefix(spec.Name, "utf16.validate_block_") || strings.HasPrefix(spec.Name, "utf8.length_") || strings.HasPrefix(spec.Name, "utf16.length_") {
+				if strings.HasPrefix(spec.Name, "json.") {
 					continue
 				}
 				for i, param := range spec.Params {
@@ -204,57 +193,6 @@ func TestV256AndV512ImportsLowerNativelyAndExecute(t *testing.T) {
 				want := byte(i*3+1) ^ byte(255-i*5)
 				if memory[i] != want {
 					t.Fatalf("byte %d=%#x, want %#x", i, memory[i], want)
-				}
-			}
-		})
-	}
-}
-
-func TestASCIIScanImports(t *testing.T) {
-	for _, bits := range []uint16{256, 512} {
-		t.Run(fmt.Sprintf("v%d", bits), func(t *testing.T) {
-			rt := wago.NewRuntime()
-			defer rt.Close()
-			if err := loadWide(rt, Config{}); err != nil {
-				t.Fatal(err)
-			}
-			mod, err := rt.Compile(asciiScanModule(bits))
-			if err != nil {
-				t.Fatal(err)
-			}
-			in, err := rt.Instantiate(context.Background(), mod)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer in.Close()
-			memory := in.Memory().UnsafeBytes()
-			for i := range memory[:4096] {
-				memory[i] = 'a'
-			}
-			width := int(bits / 8)
-			for _, size := range []int{width, width * 3, 4096} {
-				last := size - width
-				for _, dirty := range []int{-1, 0, width - 1, width, size - 1} {
-					if dirty >= size {
-						continue
-					}
-					if dirty >= 0 {
-						memory[dirty] = 0x80
-					}
-					got, err := in.Invoke("run", 0, wago.I32(int32(last)))
-					if err != nil {
-						t.Fatal(err)
-					}
-					want := uint64(0)
-					if dirty >= 0 {
-						want = 1
-					}
-					if (got[0] != 0) != (want != 0) {
-						t.Fatalf("size=%d dirty=%d got=%v", size, dirty, got)
-					}
-					if dirty >= 0 {
-						memory[dirty] = 'a'
-					}
 				}
 			}
 		})
@@ -646,190 +584,6 @@ func BenchmarkV512I64Mul(b *testing.B) {
 	}
 	elapsed := time.Since(start)
 	b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N)/iterations, "ns/wide-op")
-}
-
-func TestNativeUTF8Blocks(t *testing.T) {
-	if runtime.GOARCH != "amd64" {
-		t.Skip("AVX2 lowering runs on amd64")
-	}
-	for _, bits := range []uint16{256, 512} {
-		t.Run(itoa(int(bits)), func(t *testing.T) {
-			rt := wago.NewRuntime()
-			if err := loadWide(rt, Config{}); err != nil {
-				t.Fatal(err)
-			}
-			mod, err := rt.Compile(utf8BlockModule(bits))
-			if err != nil {
-				t.Fatal(err)
-			}
-			in, err := rt.Instantiate(context.Background(), mod)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer in.Close()
-			memory := in.Memory().UnsafeBytes()
-			width := int(bits / 8)
-			seed := uint32(0x12345678)
-			for trial := 0; trial < 2000; trial++ {
-				block := memory[256 : 256+width+3]
-				clear(block)
-				for i := 3; i < width; i++ {
-					seed = seed*1664525 + 1013904223
-					block[i] = byte(seed >> 24)
-				}
-				if trial%3 == 0 {
-					copy(block[3:], []byte("Aé中😀Z"))
-				}
-				want := !utf8.Valid(block[3:])
-				got, err := in.Invoke("run", wago.I32(256))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if (got[0] != 0) != want {
-					t.Fatalf("trial %d: native=%v want=%v block=%x", trial, got[0] != 0, want, block)
-				}
-			}
-		})
-	}
-}
-
-func TestNativeUTF16AndLengthBlocks(t *testing.T) {
-	if runtime.GOARCH != "amd64" {
-		t.Skip("AVX2 lowering runs on amd64")
-	}
-	for _, bits := range []uint16{256, 512} {
-		width := int(bits / 8)
-		for _, name := range []string{"utf16.validate_block_", "utf16.length_utf8_block_", "utf8.length_utf16_block_"} {
-			t.Run(name+itoa(int(bits)), func(t *testing.T) {
-				rt := wago.NewRuntime()
-				if err := loadWide(rt, Config{}); err != nil {
-					t.Fatal(err)
-				}
-				mod, err := rt.Compile(scalarImportModule(name + itoa(int(bits))))
-				if err != nil {
-					t.Fatal(err)
-				}
-				in, err := rt.Instantiate(context.Background(), mod)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer in.Close()
-				data := in.Memory().UnsafeBytes()[256 : 256+width+2]
-				seed := uint32(0x51b3a217)
-				for trial := 0; trial < 1000; trial++ {
-					for i := range data {
-						seed = seed*1664525 + 1013904223
-						data[i] = byte(seed >> 24)
-					}
-					want := int32(0)
-					switch name {
-					case "utf16.validate_block_":
-						for i := 0; i < width; i += 2 {
-							prev := binary.LittleEndian.Uint16(data[i:])
-							curr := binary.LittleEndian.Uint16(data[i+2:])
-							if (prev&0xfc00 == 0xd800) != (curr&0xfc00 == 0xdc00) {
-								want = 1
-								break
-							}
-						}
-					case "utf16.length_utf8_block_":
-						want = int32(width)
-						for i := 0; i < width; i++ {
-							b := data[i]
-							if b&0xc0 == 0x80 {
-								want--
-							}
-							if b&0xf8 == 0xf0 {
-								want++
-							}
-						}
-					case "utf8.length_utf16_block_":
-						want = int32(width / 2)
-						for i := 0; i < width; i += 2 {
-							u := binary.LittleEndian.Uint16(data[i:])
-							if u >= 0x80 {
-								want++
-							}
-							if u >= 0x800 {
-								want++
-							}
-							if u >= 0xdc00 && u <= 0xdfff {
-								want -= 2
-							}
-						}
-					}
-					got, err := in.Invoke("run", wago.I32(256))
-					if err != nil {
-						t.Fatal(err)
-					}
-					if name == "utf16.validate_block_" && (got[0] != 0) == (want != 0) {
-						continue
-					}
-					if int32(got[0]) != want {
-						t.Fatalf("trial %d: native=%d want=%d input=%x", trial, got[0], want, data)
-					}
-				}
-			})
-		}
-	}
-}
-
-func utf8BlockModule(bits uint16) []byte {
-	return scalarImportModule("utf8.validate_block_" + itoa(int(bits)))
-}
-
-func scalarImportModule(importName string) []byte {
-	vec := func(items ...[]byte) []byte {
-		out := uleb(uint32(len(items)))
-		for _, item := range items {
-			out = append(out, item...)
-		}
-		return out
-	}
-	section := func(id byte, body []byte) []byte {
-		return append(append([]byte{id}, uleb(uint32(len(body)))...), body...)
-	}
-	name := func(s string) []byte { return append(uleb(uint32(len(s))), s...) }
-	functionType := []byte{0x60, 1, 0x7f, 1, 0x7f}
-	imp := append(name(InstructionModule), name(importName)...)
-	imp = append(imp, 0, 0)
-	body := []byte{0, 0x20, 0, 0x10, 0, 0x0b}
-	code := append(uleb(uint32(len(body))), body...)
-	out := []byte{0, 'a', 's', 'm', 1, 0, 0, 0}
-	out = append(out, section(1, vec(functionType))...)
-	out = append(out, section(2, vec(imp))...)
-	out = append(out, section(3, vec([]byte{0}))...)
-	out = append(out, section(5, vec([]byte{0, 1}))...)
-	out = append(out, section(7, vec(append(name("run"), 0, 1), append(name("memory"), 2, 0)))...)
-	out = append(out, section(10, vec(code))...)
-	return out
-}
-
-func asciiScanModule(bits uint16) []byte {
-	vec := func(items ...[]byte) []byte {
-		out := uleb(uint32(len(items)))
-		for _, item := range items {
-			out = append(out, item...)
-		}
-		return out
-	}
-	section := func(id byte, body []byte) []byte {
-		return append(append([]byte{id}, uleb(uint32(len(body)))...), body...)
-	}
-	name := func(s string) []byte { return append(uleb(uint32(len(s))), s...) }
-	functionType := []byte{0x60, 2, 0x7f, 0x7f, 1, 0x7f}
-	imp := append(name(InstructionModule), name("ascii.scan_"+itoa(int(bits)))...)
-	imp = append(imp, 0, 0)
-	body := []byte{0, 0x20, 0, 0x20, 1, 0x10, 0, 0x0b}
-	code := append(uleb(uint32(len(body))), body...)
-	out := []byte{0, 'a', 's', 'm', 1, 0, 0, 0}
-	out = append(out, section(1, vec(functionType))...)
-	out = append(out, section(2, vec(imp))...)
-	out = append(out, section(3, vec([]byte{0}))...)
-	out = append(out, section(5, vec([]byte{0, 1}))...)
-	out = append(out, section(7, vec(append(name("run"), 0, 1), append(name("memory"), 2, 0)))...)
-	out = append(out, section(10, vec(code))...)
-	return out
 }
 
 func kernelImportModule(bits uint16, sub uint32, arity int) []byte {

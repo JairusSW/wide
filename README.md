@@ -317,15 +317,6 @@ form with the former pointer ABI: unary is `(dst, input)`, binary is
 no result. That form is useful as a single-operation boundary but reloads and
 stores between chained operations.
 
-`ascii.scan_256` and `ascii.scan_512` are fused scalar-result imports with
-physical signature `(src i32, last i32) -> i32`. `last` points to the first
-byte of the final complete 32- or 64-byte block. The run must contain at least
-one complete block; callers handle tails separately. The result is zero if all
-scanned bytes are ASCII and nonzero if any byte has its high bit set. These
-imports check the first and final blocks, then scan the run with AVX2 or NEON
-while keeping the aggregate in a vector register. They do not validate
-non-ASCII UTF-8.
-
 ## Native backends
 
 | Target | v256 | v512 |
@@ -385,13 +376,6 @@ erased-reference ABI. Median results over five benchmark runs were:
 Both paths report zero Go allocations. The difference is native linear-memory
 traffic: the `externref` chain loads once, remains in vector registers for all
 128 operations, and stores once.
-
-For an all-ASCII 4 KiB buffer on a Ryzen 7 7800X3D, the fused scan took about
-34 ns with `ascii.scan_256` and 31 ns with `ascii.scan_512`, compared with about
-108 ns for `UTF8.validateUnsafe` in the same Wago process (five pinned runs,
-median, 200 validations per invocation). The prior load, vector operation,
-store, and scalar-reduction path took about 713–749 ns per buffer. The fused
-scan is specialized for ASCII and needs a validator fallback for other input.
 
 Run the benchmarks locally:
 
